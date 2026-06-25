@@ -5,13 +5,13 @@ type AnyObj = Record<string, unknown>;
 // Strip key material from config objects — catches PEM blocks, OpenSSH public keys,
 // and TrueNAS host_*_key / host_*_key_pub / host_*_key_cert_pub fields.
 function sanitizeConfig(config: AnyObj): AnyObj {
-  const KEY_NAME = /^(host_.+_key(_pub|_cert_pub)?|.*(private|secret)_key.*)$/i;
+  const SENSITIVE_NAME = /^(host_.+_key(_pub|_cert_pub)?|.*(private|secret)_key.*|.*passphrase.*|.*password.*|.*passwd.*|monpwd|community)$/i;
   const PEM_VALUE = /^-----BEGIN /;
   const OPENSSH_PUBKEY = /^(ssh-|ecdsa-sha2-|sk-)/;
 
   return Object.fromEntries(
     Object.entries(config).filter(([k, v]) => {
-      if (KEY_NAME.test(k)) return false;
+      if (SENSITIVE_NAME.test(k)) return false;
       if (typeof v === 'string' && (PEM_VALUE.test(v) || OPENSSH_PUBKEY.test(v))) return false;
       return true;
     }),

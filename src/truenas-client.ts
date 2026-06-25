@@ -35,13 +35,19 @@ export class TrueNASClient {
       }
 
       const ws = new WebSocket(url, wsOptions);
+
+      // Tear down any previous socket before replacing it so its close event
+      // cannot fire against the new connection (#3).
+      if (this.ws) {
+        this.ws.removeAllListeners();
+        this.ws.terminate();
+      }
       this.ws = ws;
 
       ws.once('error', reject);
 
       ws.once('open', () => {
         ws.off('error', reject);
-        this.connected = true;
         this.reconnectDelay = 1000;
 
         ws.on('message', (data) => this.onMessage(data.toString()));
@@ -50,7 +56,12 @@ export class TrueNASClient {
           process.stderr.write(`[truenas-mcp] WebSocket error: ${err.message}\n`);
         });
 
-        this.authenticate().then(resolve).catch(reject);
+        // Set connected only after auth succeeds so concurrent MCP calls
+        // cannot reach the socket before authentication completes (#7).
+        this.authenticate().then(() => {
+          this.connected = true;
+          resolve();
+        }).catch(reject);
       });
     });
   }
@@ -115,7 +126,7 @@ export class TrueNASClient {
   }
 
   private rawCall(method: string, params: unknown[]): Promise<unknown> {
-    if (!this.ws || !this.connected) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error('Not connected to TrueNAS'));
     }
     const id = randomUUID();
@@ -133,6 +144,9 @@ export class TrueNASClient {
   }
 
   call<T = unknown>(method: string, params: unknown[] = []): Promise<T> {
+    if (!this.connected) {
+      return Promise.reject(new Error('Not connected to TrueNAS'));
+    }
     return this.rawCall(method, params) as Promise<T>;
   }
 

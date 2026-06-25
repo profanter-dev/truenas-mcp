@@ -10,12 +10,13 @@ function parseTs(val: unknown): string | null {
   return null;
 }
 
-function jobKey(job: AnyObj, cronById: Map<number, AnyObj>): string {
+function jobKey(job: AnyObj): string {
   const method = job['method'] as string;
   const args = job['arguments'] as unknown[] | null | undefined;
   if (method === 'cronjob.run' && Array.isArray(args) && args.length > 0) {
-    const cron = cronById.get(args[0] as number);
-    if (cron) return `cronjob:${args[0]}`;
+    // Use the cron ID regardless of whether the cron still exists, so deleted
+    // cron jobs don't all collapse into one dedup bucket.
+    return `cronjob:${args[0]}`;
   }
   return `method:${method}`;
 }
@@ -26,6 +27,7 @@ function jobDescription(job: AnyObj, cronById: Map<number, AnyObj>): string {
   if (method === 'cronjob.run' && Array.isArray(args) && args.length > 0) {
     const cron = cronById.get(args[0] as number);
     if (cron) return (cron['description'] as string) || (cron['command'] as string);
+    return `cronjob:${args[0]} (deleted)`;
   }
   return (job['description'] as string) || method;
 }
@@ -51,7 +53,7 @@ export async function jobList(client: TrueNASClient): Promise<string> {
   // Group by unique job key, keep only the most recent run per key
   const seen = new Map<string, AnyObj>();
   for (const job of jobs) {
-    const key = jobKey(job, cronById);
+    const key = jobKey(job);
     if (!seen.has(key)) seen.set(key, job);
   }
 
@@ -73,35 +75,34 @@ export async function jobList(client: TrueNASClient): Promise<string> {
 export async function jobHistory(client: TrueNASClient, description: string, limit: number): Promise<string> {
   const cronById = await fetchCronMap(client);
 
-  // Find the cron job matching the description
-  let filter: unknown[][];
-  let matchedDescription = description;
-
   const cronEntry = [...cronById.values()].find(
     (c) => (c['description'] as string) === description || (c['command'] as string) === description,
   );
 
-  if (cronEntry) {
-    filter = [['method', '=', 'cronjob.run'], ['arguments', 'rin', [cronEntry['id']]]];
-  } else {
-    filter = [['method', '=', description]];
-    matchedDescription = description;
-  }
-
-  // Fallback: fetch all jobs and filter client-side (avoids API filter syntax uncertainty)
-  const allJobs = await client.call<AnyObj[]>('core.get_jobs', [
-    [],
-    { order_by: ['-time_finished'], limit: 1000 },
-  ]);
+  const matchedDescription = cronEntry
+    ? ((cronEntry['description'] as string) || (cronEntry['command'] as string))
+    : description;
 
   const cronId = cronEntry ? (cronEntry['id'] as number) : null;
-  const filtered = allJobs.filter((job) => {
-    if (cronId !== null) {
-      const args = job['arguments'] as unknown[] | null | undefined;
-      return job['method'] === 'cronjob.run' && Array.isArray(args) && args[0] === cronId;
-    }
-    return job['method'] === description;
-  });
+
+  // Filter by method server-side to avoid scanning the full job table.
+  // For cron jobs we filter by method only (can't filter by arguments server-side),
+  // then narrow by cronId client-side.
+  const apiFilter = cronId !== null
+    ? [['method', '=', 'cronjob.run']]
+    : [['method', '=', description]];
+
+  const jobs = await client.call<AnyObj[]>('core.get_jobs', [
+    apiFilter,
+    { order_by: ['-time_finished'], limit: Math.max(limit * 10, 100) },
+  ]);
+
+  const filtered = cronId !== null
+    ? jobs.filter((job) => {
+        const args = job['arguments'] as unknown[] | null | undefined;
+        return Array.isArray(args) && args[0] === cronId;
+      })
+    : jobs;
 
   if (!filtered.length) {
     return JSON.stringify({ message: `No job history found for: ${description}` }, null, 2);

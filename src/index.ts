@@ -104,7 +104,7 @@ const TOOLS: Tool[] = [
         description: { type: 'string', description: 'Job description as shown in job_list, e.g. "Update LED status"' },
         limit: { type: 'number', description: 'Number of runs to return (default 5)', default: 5 },
       },
-      required: ['description', 'limit'],
+      required: ['description'],
     },
   },
   {

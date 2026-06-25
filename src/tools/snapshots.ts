@@ -1,13 +1,7 @@
 import { TrueNASClient } from '../truenas-client.js';
+import { formatBytes } from './utils.js';
 
 type AnyObj = Record<string, unknown>;
-
-function formatBytes(bytes: number): string {
-  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
-  let v = bytes; let i = 0;
-  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
-  return `${v.toFixed(2)} ${units[i]}`;
-}
 
 function getCreationMs(raw: AnyObj): number {
   const p = raw['properties'] as AnyObj ?? {};
