@@ -3,15 +3,6 @@ import { formatBytes } from './utils.js';
 
 type AnyObj = Record<string, unknown>;
 
-function getCreationMs(raw: AnyObj): number {
-  const p = raw['properties'] as AnyObj ?? {};
-  const creation = (p['creation'] as AnyObj | undefined)?.['parsed'];
-  if (typeof creation === 'object' && creation !== null && '$date' in (creation as object)) {
-    return (creation as { $date: number }).$date;
-  }
-  return 0;
-}
-
 function prop(properties: AnyObj, key: string): unknown {
   const v = properties[key] as AnyObj | undefined;
   return v?.['parsed'] ?? null;
@@ -60,8 +51,6 @@ export async function snapshotList(
     const ctx = datasetId ? `dataset '${datasetId}'` : 'any dataset';
     return JSON.stringify({ message: `No snapshots found for ${ctx}.` }, null, 2);
   }
-
-  snapshots.sort((a, b) => getCreationMs(b) - getCreationMs(a));
 
   return JSON.stringify(snapshots.map(summarise), null, 2);
 }
