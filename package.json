@@ -1,34 +1,40 @@
 {
-  "name": "@profanter-dev/truenas-mcp",
-  "version": "1.0.0",
-  "description": "Read-only MCP server for TrueNAS SCALE 25.10+ — JSON-RPC 2.0 WebSocket",
-  "author": "profanter-dev",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/profanter-dev/truenas-mcp.git"
-  },
-  "engines": { "node": ">=18" },
-  "type": "module",
-  "bin": { "truenas-mcp": "dist/index.js" },
-  "main": "dist/index.js",
-  "files": ["dist"],
-  "scripts": {
-    "build": "tsc",
-    "dev": "tsx src/index.ts",
-    "start": "node dist/index.js",
-    "prepublishOnly": "yarn build"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.0",
-    "dotenv": "^16.4.7",
-    "ws": "^8.18.0",
-    "zod": "^3.25.0"
-  },
-  "devDependencies": {
-    "@types/node": "^22.0.0",
-    "@types/ws": "^8.5.14",
-    "tsx": "^4.19.0",
-    "typescript": "^5.8.0"
-  }
+	"name": "@profanter-dev/truenas-mcp",
+	"version": "1.0.1",
+	"description": "Read-only MCP server for TrueNAS SCALE 25.10+ — JSON-RPC 2.0 WebSocket",
+	"author": "profanter-dev",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/profanter-dev/truenas-mcp.git"
+	},
+	"engines": {
+		"node": ">=18"
+	},
+	"type": "module",
+	"bin": {
+		"truenas-mcp": "dist/index.js"
+	},
+	"main": "dist/index.js",
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"build": "tsc",
+		"dev": "tsx src/index.ts",
+		"start": "node dist/index.js",
+		"prepublishOnly": "yarn build"
+	},
+	"dependencies": {
+		"@modelcontextprotocol/sdk": "^1.12.0",
+		"dotenv": "^16.4.7",
+		"ws": "^8.18.0",
+		"zod": "^3.25.0"
+	},
+	"devDependencies": {
+		"@types/node": "^22.0.0",
+		"@types/ws": "^8.5.14",
+		"tsx": "^4.19.0",
+		"typescript": "^5.8.0"
+	}
 }
