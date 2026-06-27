@@ -15,8 +15,11 @@ import { jobList, jobHistory } from './tools/jobs.js';
 import { alertList } from './tools/alerts.js';
 import { shareList, shareDetails } from './tools/shares.js';
 import { systemInfo } from './tools/system.js';
+import { appList, appDetails, appLogs } from './tools/apps.js';
 import { serviceList, serviceDetails } from './tools/services.js';
 import { snapshotList, snapshotDetails } from './tools/snapshots.js';
+import { containerList, containerDetails, containerLogs } from './tools/containers.js';
+import { makeDockerClient } from './docker-client.js';
 
 const host = process.env['TRUENAS_HOST'];
 const apiKey = process.env['TRUENAS_API_KEY'];
@@ -30,6 +33,7 @@ if (!host || !apiKey) {
 }
 
 const client = new TrueNASClient(host, apiKey, insecure);
+const docker = makeDockerClient();
 
 const server = new Server(
   { name: 'truenas-mcp', version: '0.1.0' },
@@ -152,6 +156,34 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: 'app_list',
+    description: 'List all installed TrueNAS apps with their state, version, and whether an update is available.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'app_details',
+    description: 'Get full details for a single TrueNAS app: state, version, portals, active workloads, and notes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        app_name: { type: 'string', description: 'App name as shown in app_list, e.g. "actual-budget"' },
+      },
+      required: ['app_name'],
+    },
+  },
+  {
+    name: 'app_logs',
+    description: 'Retrieve recent log output for a TrueNAS app.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        app_name: { type: 'string', description: 'App name as shown in app_list' },
+        tail_lines: { type: 'number', description: 'Number of log lines to return (default 100)', default: 100 },
+      },
+      required: ['app_name'],
+    },
+  },
+  {
     name: 'share_list',
     description: 'List all configured SMB and NFS shares with their path, enabled state, and comment.',
     inputSchema: { type: 'object', properties: {} },
@@ -175,7 +207,40 @@ const TOOLS: Tool[] = [
   },
 ];
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
+const DOCKER_TOOLS: Tool[] = [
+  {
+    name: 'container_list',
+    description: 'List all Docker containers (running and stopped) with their state and health status. Requires DOCKER_PROXY_URL to be configured.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'container_details',
+    description: 'Full details for a single Docker container: image, state, ports, mounts, networks. Environment variables with secrets are redacted.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name_or_id: { type: 'string', description: 'Container name or short ID as shown in container_list' },
+      },
+      required: ['name_or_id'],
+    },
+  },
+  {
+    name: 'container_logs',
+    description: 'Retrieve recent log output for a Docker container.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name_or_id: { type: 'string', description: 'Container name or short ID' },
+        tail: { type: 'number', description: 'Number of log lines to return (default 100)', default: 100 },
+      },
+      required: ['name_or_id'],
+    },
+  },
+];
+
+const allTools = docker ? [...TOOLS, ...DOCKER_TOOLS] : TOOLS;
+
+server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: allTools }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
@@ -245,6 +310,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return run(() => snapshotDetails(client, snapshotId));
     }
 
+    case 'app_list':
+      return run(() => appList(client));
+
+    case 'app_details': {
+      const appName = String((args as Record<string, unknown>)?.['app_name'] ?? '');
+      return run(() => appDetails(client, appName));
+    }
+
+    case 'app_logs': {
+      const a = args as Record<string, unknown>;
+      const appName = String(a?.['app_name'] ?? '');
+      const tailLines = Math.max(1, Number(a?.['tail_lines']) || 100);
+      return run(() => appLogs(client, appName, tailLines));
+    }
+
     case 'share_list':
       return run(() => shareList(client));
 
@@ -265,6 +345,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case 'alert_list':
       return run(() => alertList(client));
+
+    case 'container_list':
+      if (!docker) return err('Docker proxy not configured. Set DOCKER_PROXY_URL, DOCKER_PROXY_USER, DOCKER_PROXY_PASS.');
+      return run(() => containerList(docker));
+
+    case 'container_details': {
+      if (!docker) return err('Docker proxy not configured. Set DOCKER_PROXY_URL, DOCKER_PROXY_USER, DOCKER_PROXY_PASS.');
+      const nameOrId = String((args as Record<string, unknown>)?.['name_or_id'] ?? '');
+      return run(() => containerDetails(docker, nameOrId));
+    }
+
+    case 'container_logs': {
+      if (!docker) return err('Docker proxy not configured. Set DOCKER_PROXY_URL, DOCKER_PROXY_USER, DOCKER_PROXY_PASS.');
+      const a = args as Record<string, unknown>;
+      const nameOrId = String(a?.['name_or_id'] ?? '');
+      const tail = Math.max(1, Number(a?.['tail']) || 100);
+      return run(() => containerLogs(docker, nameOrId, tail));
+    }
 
     default:
       return err(`Unknown tool: ${name}`);
