@@ -119,13 +119,14 @@ export class TrueNASClient {
           process.stderr.write('[truenas-mcp] Reconnected.\n');
         })
         .catch((err: Error) => {
-          // Don't retry on auth failures — wrong key or rate-limited.
-          // Retrying would burn through the 20 attempts/60s limit.
-          if (err.message.includes('authentication failed') || err.message.includes('[-32000]')) {
-            process.stderr.write(`[truenas-mcp] Auth error, not retrying: ${err.message}\n`);
-            return;
+          const isAuthError = err.message.includes('authentication failed') || err.message.includes('[-32000]');
+          if (isAuthError) {
+            // Back off 70s to let TrueNAS's auth rate limit (20 attempts/60s) clear.
+            // This happens when multiple sessions share the same API key.
+            this.reconnectDelay = 70_000;
+          } else {
+            this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30_000);
           }
-          this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30_000);
           this.scheduleReconnect();
         });
     }, delay);

@@ -215,7 +215,7 @@ const DOCKER_TOOLS: Tool[] = [
   },
   {
     name: 'container_details',
-    description: 'Full details for a single Docker container: image, state, ports, mounts, networks. Environment variables with secrets are redacted.',
+    description: 'Full details for a single Docker container: image, state, ports, mounts, networks, labels. Environment variables with secrets are redacted.',
     inputSchema: {
       type: 'object',
       properties: {

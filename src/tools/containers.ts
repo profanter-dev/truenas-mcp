@@ -62,6 +62,7 @@ export async function containerDetails(docker: DockerClient, nameOrId: string): 
     health: (state['Health'] as AnyObj | undefined)?.['Status'] ?? null,
     restart_count: detail['RestartCount'],
     ports: (detail['HostConfig'] as AnyObj ?? {})['PortBindings'],
+    labels: cfg['Labels'] ?? {},
     env: (cfg['Env'] as string[] | undefined)?.filter((e) => !/(PASSWORD|SECRET|TOKEN|KEY)=/i.test(e)) ?? [],
     networks: Object.keys(net),
     mounts: (detail['Mounts'] as AnyObj[] | undefined)?.map((m) => ({

@@ -118,7 +118,7 @@ All entities follow a consistent **list / details** pattern.
 | Tool | Description |
 |---|---|
 | `container_list` | All Docker containers (running and stopped) — name, image, state, health |
-| `container_details` | Single container: image, state, ports, mounts, networks. Secret env vars are redacted. |
+| `container_details` | Single container: image, state, ports, mounts, networks, labels. Secret env vars are redacted. |
 | `container_logs` | Recent log output for a container; configurable line count (default 100) |
 
 These tools are only registered when `DOCKER_PROXY_URL` is set.
