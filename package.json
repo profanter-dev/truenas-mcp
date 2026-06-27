@@ -1,6 +1,6 @@
 {
 	"name": "@profanter-dev/truenas-mcp",
-	"version": "1.0.2",
+	"version": "1.0.3",
 	"description": "Read-only MCP server for TrueNAS SCALE 25.10+ — JSON-RPC 2.0 WebSocket",
 	"author": "profanter-dev",
 	"license": "MIT",
