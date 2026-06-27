@@ -118,7 +118,13 @@ export class TrueNASClient {
         .then(() => {
           process.stderr.write('[truenas-mcp] Reconnected.\n');
         })
-        .catch(() => {
+        .catch((err: Error) => {
+          // Don't retry on auth failures — wrong key or rate-limited.
+          // Retrying would burn through the 20 attempts/60s limit.
+          if (err.message.includes('authentication failed') || err.message.includes('[-32000]')) {
+            process.stderr.write(`[truenas-mcp] Auth error, not retrying: ${err.message}\n`);
+            return;
+          }
           this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30_000);
           this.scheduleReconnect();
         });
