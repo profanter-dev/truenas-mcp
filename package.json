@@ -23,7 +23,7 @@
 		"build": "tsc",
 		"dev": "tsx src/index.ts",
 		"start": "node dist/index.js",
-		"prepublishOnly": "yarn build"
+		"prepublishOnly": "npm run build"
 	},
 	"dependencies": {
 		"@modelcontextprotocol/sdk": "^1.30.0",

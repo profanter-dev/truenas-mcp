@@ -14,17 +14,26 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # No registry-url here: it writes a .yarnrc containing ${NODE_AUTH_TOKEN},
+      # and setup-node v7 dropped the dummy export of that variable, so any yarn
+      # command reading that config fails with "Failed to replace env in config".
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: yarn
-          registry-url: https://registry.npmjs.org
-
-      - run: npm install -g npm@latest
 
       - run: yarn install --frozen-lockfile
 
       - run: yarn build
+
+      # Registry auth is only needed for the publish itself. Publishing uses npm
+      # Trusted Publishing (OIDC) via the id-token permission above — no token.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - run: npm install -g npm@latest
 
       - run: npm publish --access public
 
