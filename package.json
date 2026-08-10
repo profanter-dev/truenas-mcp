@@ -1,6 +1,6 @@
 {
 	"name": "@profanter-dev/truenas-mcp",
-	"version": "1.0.5",
+	"version": "1.0.6",
 	"description": "Read-only MCP server for TrueNAS SCALE 25.10+ — JSON-RPC 2.0 WebSocket",
 	"author": "profanter-dev",
 	"license": "MIT",
@@ -26,15 +26,14 @@
 		"prepublishOnly": "yarn build"
 	},
 	"dependencies": {
-		"@modelcontextprotocol/sdk": "^1.12.0",
-		"dotenv": "^16.4.7",
-		"ws": "^8.18.0",
-		"zod": "^3.25.0"
+		"@modelcontextprotocol/sdk": "^1.30.0",
+		"dotenv": "^17.4.2",
+		"ws": "^8.21.3"
 	},
 	"devDependencies": {
-		"@types/node": "^22.0.0",
-		"@types/ws": "^8.5.14",
-		"tsx": "^4.19.0",
-		"typescript": "^5.8.0"
+		"@types/node": "^24.0.0",
+		"@types/ws": "^8.18.1",
+		"tsx": "^4.23.12",
+		"typescript": "^7.0.2"
 	}
 }
