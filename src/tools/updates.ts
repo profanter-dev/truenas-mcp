@@ -370,9 +370,26 @@ async function updateOne(docker: DockerClient, id: string, opts: UpdateOptions):
   }
 
   if (!wasRunning) {
-    // Nothing ran; mirror the old state (stopped) and don't touch dependents.
-    if (!opts.keepOld) await docker.removeContainer(id).catch(() => {});
-    return { container: name, outcome: 'updated', ...images, detail: 'Recreated on the new image but not started (it was stopped before).', ...(opts.keepOld ? { old_container_kept_as: oldName } : {}) };
+    // Nothing ran; mirror the old state (stopped). Dependents still point at the
+    // old container's ID, so they must be moved over before it can be deleted.
+    const depResults: Array<UpdateResult & { oldId?: string }> = [];
+    for (const d of deps) {
+      depResults.push(await recreateDependent(docker, d, newId, opts).catch((e) =>
+        ({ container: nameOf(d), outcome: 'failed' as const, detail: errMsg(e) })));
+    }
+    const keep = opts.keepOld || !depResults.every((r) => r.outcome === 'updated');
+    if (!keep) {
+      await docker.removeContainer(id).catch(() => {});
+      for (const r of depResults) if (r.oldId) await docker.removeContainer(r.oldId).catch(() => {});
+    }
+    return {
+      container: name,
+      outcome: 'updated',
+      ...images,
+      detail: 'Recreated on the new image but not started (it was stopped before).',
+      ...(keep ? { old_container_kept_as: oldName } : {}),
+      ...(depResults.length ? { dependents: depResults.map(({ oldId: _, ...r }) => r) } : {}),
+    };
   }
 
   const health = await waitHealthy(docker, newId, opts.healthTimeoutSec);
@@ -497,7 +514,7 @@ export async function containerRollback(docker: DockerClient, nameOrId: string):
     const failedName = `${name}-failed-${timestamp()}`;
     const steps: string[] = [];
     try {
-      if (match['State'] === 'running') {
+      if (['running', 'restarting', 'paused'].includes(String(match['State']))) {
         await docker.stop(curId);
         steps.push(`stopped ${name}`);
       }

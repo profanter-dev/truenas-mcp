@@ -21,15 +21,20 @@ function healthFromStatus(status: unknown): string | null {
   return status.match(/\((healthy|unhealthy|health: starting)\)/)?.[1] ?? null;
 }
 
+// An exact name wins over an ID prefix: short hex-looking names ("db", "cafe")
+// can also prefix another container's ID, and write tools act on the result.
 export async function resolveContainer(docker: DockerClient, nameOrId: string): Promise<AnyObj | null> {
   if (!nameOrId) return null;
   const all = await docker.containers(true) as AnyObj[];
-  return all.find((c) => {
-    const id = String(c['Id'] ?? '');
-    const names = (c['Names'] as string[] | undefined) ?? [];
-    return id.startsWith(nameOrId) ||
-      names.some((n) => n.replace(/^\//, '') === nameOrId);
-  }) ?? null;
+  const byName = all.find((c) =>
+    ((c['Names'] as string[] | undefined) ?? []).some((n) => n.replace(/^\//, '') === nameOrId));
+  if (byName) return byName;
+
+  const byId = all.filter((c) => String(c['Id'] ?? '').startsWith(nameOrId));
+  if (byId.length > 1) {
+    throw new Error(`'${nameOrId}' matches ${byId.length} container IDs; use a longer ID or the container name.`);
+  }
+  return byId[0] ?? null;
 }
 
 // Labels carry credentials too, e.g. Traefik basic-auth middlewares store

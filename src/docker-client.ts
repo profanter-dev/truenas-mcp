@@ -130,7 +130,14 @@ export class DockerClient {
   // Returns false when Docker reports 304 (already in the requested state).
   private async containerAction(id: string, action: 'start' | 'stop' | 'restart', timeoutSec?: number): Promise<boolean> {
     const query: Query = timeoutSec != null ? { t: timeoutSec } : {};
-    const waitMs = ((timeoutSec ?? 10) + 30) * 1000;
+    // Without an explicit timeout Docker uses the container's own StopTimeout
+    // (compose stop_grace_period), so wait at least that long.
+    let grace = timeoutSec ?? 10;
+    if (timeoutSec == null && action !== 'start') {
+      const cfg = (await this.inspectContainer(id) as { Config?: { StopTimeout?: number } }).Config;
+      grace = cfg?.StopTimeout ?? 10;
+    }
+    const waitMs = (grace + 30) * 1000;
     const res = await this.request('POST', `/containers/${id}/${action}`, query, waitMs);
     if (res.status === 304) return false;
     if (res.status >= 400) throw new Error(errorMessage(res));
@@ -216,7 +223,14 @@ export class DockerClient {
           while ((nl = buf.indexOf('\n')) >= 0) {
             const line = buf.slice(0, nl).trim();
             buf = buf.slice(nl + 1);
-            if (line) samples.push(JSON.parse(line));
+            if (line) {
+              try {
+                samples.push(JSON.parse(line));
+              } catch {
+                req.destroy();
+                return reject(new Error(`Unreadable stats sample from Docker for ${id}`));
+              }
+            }
             if (samples.length >= count) {
               req.destroy();
               return resolve(samples);
