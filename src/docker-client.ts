@@ -5,11 +5,18 @@
 // allowlist of method + path, query strings are built internally only, and
 // there is deliberately no generic passthrough. Add an entry here only together
 // with the tool that needs it.
+//
+// /containers/create is the one endpoint that could grant arbitrary access, so
+// it is only reachable through createContainer(), whose body is always derived
+// from an existing container's inspect output (see tools/updates.ts) — never
+// from tool arguments.
 
 import http from 'node:http';
 import { existsSync } from 'node:fs';
 
 const ID = '[a-zA-Z0-9][a-zA-Z0-9_.-]*';
+// Image reference or ID: "nginx:latest", "ghcr.io/a/b:1.2", "repo@sha256:…", "sha256:…".
+const REF = '[a-zA-Z0-9][a-zA-Z0-9_.\\-/:@]*';
 
 const ALLOWED: ReadonlyArray<readonly [string, RegExp]> = [
   ['GET', /^\/_ping$/],
@@ -18,7 +25,21 @@ const ALLOWED: ReadonlyArray<readonly [string, RegExp]> = [
   ['GET', new RegExp(`^/containers/${ID}/logs$`)],
   ['POST', new RegExp(`^/containers/${ID}/(start|stop|restart)$`)],
   ['POST', /^\/images\/create$/],
+  ['GET', new RegExp(`^/images/${REF}/json$`)],
+  ['GET', new RegExp(`^/distribution/${REF}/json$`)],
+  ['POST', /^\/images\/prune$/],
+  ['POST', /^\/containers\/create$/],
+  ['POST', new RegExp(`^/containers/${ID}/rename$`)],
+  ['DELETE', new RegExp(`^/containers/${ID}$`)],
 ];
+
+// Docker pulls *every* tag of a repository when fromImage has no tag, so make
+// the implicit ":latest" explicit.
+export function normalizeRef(ref: string): string {
+  if (ref.includes('@')) return ref;
+  const last = ref.split('/').pop() ?? '';
+  return last.includes(':') ? ref : `${ref}:latest`;
+}
 
 type Query = Record<string, string | number | boolean>;
 
@@ -57,16 +78,30 @@ function errorMessage(res: RawResponse): string {
 export class DockerClient {
   constructor(private readonly socketPath: string) {}
 
-  private async request(method: string, path: string, query: Query = {}, timeoutMs = 30_000): Promise<RawResponse> {
-    if (!ALLOWED.some(([m, re]) => m === method && re.test(path))) {
+  private async request(
+    method: string,
+    path: string,
+    query: Query = {},
+    timeoutMs = 30_000,
+    body?: unknown,
+  ): Promise<RawResponse> {
+    const traversal = path.includes('..') || path.includes('//');
+    if (traversal || !ALLOWED.some(([m, re]) => m === method && re.test(path))) {
       throw new Error(`Docker API call not permitted: ${method} ${path}`);
     }
+    const payload = body === undefined ? undefined : JSON.stringify(body);
 
     const qs = new URLSearchParams(Object.entries(query).map(([k, v]) => [k, String(v)])).toString();
 
     return new Promise((resolve, reject) => {
       const req = http.request(
-        { socketPath: this.socketPath, method, path: qs ? `${path}?${qs}` : path, timeout: timeoutMs },
+        {
+          socketPath: this.socketPath,
+          method,
+          path: qs ? `${path}?${qs}` : path,
+          timeout: timeoutMs,
+          headers: payload ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } : {},
+        },
         (res) => {
           const chunks: Buffer[] = [];
           res.on('data', (c: Buffer) => chunks.push(c));
@@ -76,7 +111,7 @@ export class DockerClient {
       );
       req.on('timeout', () => req.destroy(new Error(`Docker request timed out: ${method} ${path}`)));
       req.on('error', reject);
-      req.end();
+      req.end(payload);
     });
   }
 
@@ -135,6 +170,7 @@ export class DockerClient {
   // streams newline-delimited JSON progress; failures arrive as an `error`
   // line inside a 200 response, so every line has to be checked.
   async pullImage(ref: string): Promise<string> {
+    ref = normalizeRef(ref);
     const res = await this.request('POST', '/images/create', { fromImage: ref }, 10 * 60_000);
     if (res.status >= 400) throw new Error(errorMessage(res));
 
@@ -151,6 +187,43 @@ export class DockerClient {
       if (evt.status) lastStatus = evt.status;
     }
     return lastStatus;
+  }
+
+  async inspectImage(ref: string) {
+    return this.getJson<Record<string, unknown>>(`/images/${ref}/json`);
+  }
+
+  // Asks the daemon for the registry's current manifest digest of a reference.
+  async registryDigest(ref: string): Promise<string> {
+    const res = await this.request('GET', `/distribution/${normalizeRef(ref)}/json`, {}, 60_000);
+    if (res.status >= 400) throw new Error(errorMessage(res));
+    const digest = (JSON.parse(res.body.toString('utf8')) as { Descriptor?: { digest?: string } }).Descriptor?.digest;
+    if (!digest) throw new Error(`Registry returned no digest for ${ref}`);
+    return digest;
+  }
+
+  async pruneImages(all: boolean): Promise<{ ImagesDeleted?: Array<Record<string, string>> | null; SpaceReclaimed?: number }> {
+    const query: Query = all ? { filters: JSON.stringify({ dangling: ['false'] }) } : {};
+    const res = await this.request('POST', '/images/prune', query, 5 * 60_000);
+    if (res.status >= 400) throw new Error(errorMessage(res));
+    return JSON.parse(res.body.toString('utf8'));
+  }
+
+  async createContainer(name: string, body: Record<string, unknown>): Promise<string> {
+    const res = await this.request('POST', '/containers/create', { name }, 60_000, body);
+    if (res.status >= 400) throw new Error(errorMessage(res));
+    return (JSON.parse(res.body.toString('utf8')) as { Id: string }).Id;
+  }
+
+  async renameContainer(id: string, name: string): Promise<void> {
+    const res = await this.request('POST', `/containers/${id}/rename`, { name });
+    if (res.status >= 400) throw new Error(errorMessage(res));
+  }
+
+  // Never passes v=1 or force=1: volumes are kept and running containers refused.
+  async removeContainer(id: string): Promise<void> {
+    const res = await this.request('DELETE', `/containers/${id}`);
+    if (res.status >= 400) throw new Error(errorMessage(res));
   }
 }
 

@@ -5,11 +5,11 @@ import { ToolDef, READ_ONLY, str, posInt } from './registry.js';
 
 type AnyObj = Record<string, unknown>;
 
-function shortId(id: unknown): string {
+export function shortId(id: unknown): string {
   return typeof id === 'string' ? id.slice(0, 12) : String(id);
 }
 
-function primaryName(names: unknown): string {
+export function primaryName(names: unknown): string {
   if (!Array.isArray(names) || !names.length) return '?';
   return String(names[0]).replace(/^\//, '');
 }
@@ -21,7 +21,7 @@ function healthFromStatus(status: unknown): string | null {
   return status.match(/\((healthy|unhealthy|health: starting)\)/)?.[1] ?? null;
 }
 
-async function resolveContainer(docker: DockerClient, nameOrId: string): Promise<AnyObj | null> {
+export async function resolveContainer(docker: DockerClient, nameOrId: string): Promise<AnyObj | null> {
   if (!nameOrId) return null;
   const all = await docker.containers(true) as AnyObj[];
   return all.find((c) => {
@@ -64,7 +64,7 @@ function ownContainerId(): string | null {
   return selfId;
 }
 
-function isSelf(id: string): boolean {
+export function isSelf(id: string): boolean {
   const own = ownContainerId();
   return own != null && (id.startsWith(own) || own.startsWith(id));
 }

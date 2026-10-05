@@ -17,6 +17,7 @@ import { appTools } from './tools/apps.js';
 import { serviceTools } from './tools/services.js';
 import { snapshotTools } from './tools/snapshots.js';
 import { containerTools } from './tools/containers.js';
+import { updateTools } from './tools/updates.js';
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
@@ -45,6 +46,7 @@ const tools: ToolDef[] = [
   ...appTools(client),
   ...jobTools(client),
   ...(docker ? containerTools(docker, { write: config.dockerWriteTools }) : []),
+  ...(docker ? updateTools(docker, { write: config.dockerWriteTools }) : []),
 ];
 
 // Hash both sides so timingSafeEqual gets equal-length inputs and the token
