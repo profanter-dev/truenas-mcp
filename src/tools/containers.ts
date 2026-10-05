@@ -32,6 +32,18 @@ async function resolveContainer(docker: DockerClient, nameOrId: string): Promise
   }) ?? null;
 }
 
+// Labels carry credentials too, e.g. Traefik basic-auth middlewares store
+// htpasswd hashes in `...basicauth.users`. Keep the key, mask the value.
+const SENSITIVE_LABEL_KEY = /(password|passwd|secret|token|key|credential|(basic|digest)auth\.users)/i;
+const HASH_VALUE = /\$(apr1|2[abxy]?|[156])\$|\{SHA\}/;
+
+function redactLabels(labels: unknown): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries((labels as Record<string, string> | null) ?? {}).map(([k, v]) =>
+      [k, SENSITIVE_LABEL_KEY.test(k) || HASH_VALUE.test(String(v)) ? '[redacted]' : v]),
+  );
+}
+
 function notFound(nameOrId: string): string {
   return JSON.stringify({ error: `Container '${nameOrId}' not found.` }, null, 2);
 }
@@ -100,7 +112,7 @@ export async function containerDetails(docker: DockerClient, nameOrId: string): 
     health: (state['Health'] as AnyObj | undefined)?.['Status'] ?? null,
     restart_count: detail['RestartCount'],
     ports: (detail['HostConfig'] as AnyObj ?? {})['PortBindings'],
-    labels: cfg['Labels'] ?? {},
+    labels: redactLabels(cfg['Labels']),
     env: (cfg['Env'] as string[] | undefined)?.filter((e) => !/(PASSWORD|SECRET|TOKEN|KEY)=/i.test(e)) ?? [],
     networks: Object.keys(net),
     mounts: (detail['Mounts'] as AnyObj[] | undefined)?.map((m) => ({
@@ -203,7 +215,7 @@ export function containerTools(docker: DockerClient, opts: { write: boolean }): 
     {
       tool: {
         name: 'container_details',
-        description: 'Full details for a single Docker container: image, state, ports, mounts, networks, labels. Environment variables with secrets are redacted.',
+        description: 'Full details for a single Docker container: image, state, ports, mounts, networks, labels. Environment variables and labels with secrets are redacted.',
         inputSchema: { type: 'object', properties: { name_or_id: NAME_OR_ID }, required: ['name_or_id'] },
         annotations: READ_ONLY,
       },
