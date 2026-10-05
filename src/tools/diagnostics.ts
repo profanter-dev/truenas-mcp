@@ -113,7 +113,9 @@ export async function containerStats(docker: DockerClient, nameOrId?: string): P
   const cores = ok[0]?._cores ?? null;
 
   return JSON.stringify({
-    note: 'cpu_percent: 100 = one full core. working_set excludes reclaimable page cache. Rates are measured over ~1 s.',
+    note: 'cpu_percent: 100 = one full core. working_set excludes reclaimable page cache. Rates are measured over ~1 s. '
+      + 'Block writes to ZFS are flushed by kernel threads and are not attributed to containers (write counters stay near 0); see process_list for ZFS threads. '
+      + 'Containers sharing a network namespace report the same network counters.',
     host_cores: cores,
     totals: {
       cpu_percent: round1(ok.reduce((a, r) => a + r.cpu_percent, 0)),
@@ -275,7 +277,9 @@ async function dockerProcessList(docker: DockerClient, sort: 'cpu' | 'memory', l
   });
 
   const rows = perContainer.flat();
-  rows.sort((x, y) => (sort === 'memory' ? y.rss_bytes - x.rss_bytes : y.cpu_percent_lifetime_avg - x.cpu_percent_lifetime_avg));
+  rows.sort((x, y) => (sort === 'memory'
+    ? y.rss_bytes - x.rss_bytes
+    : y.cpu_percent_lifetime_avg - x.cpu_percent_lifetime_avg || y.rss_bytes - x.rss_bytes));
 
   return JSON.stringify({
     note: 'Host /proc is not mounted, so only container processes are shown and %CPU is ps\'s average over each process\'s lifetime, not current usage. Mount /proc:/host/proc:ro for current CPU, host processes (ZFS, SMB, middleware) and memory/ARC details.',
