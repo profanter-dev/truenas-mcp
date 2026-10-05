@@ -150,6 +150,10 @@ export class TrueNASClient {
     });
   }
 
+  get isConnected(): boolean {
+    return this.connected;
+  }
+
   call<T = unknown>(method: string, params: unknown[] = []): Promise<T> {
     if (!this.connected) {
       return Promise.reject(new Error('Not connected to TrueNAS'));

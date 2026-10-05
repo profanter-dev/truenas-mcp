@@ -1,4 +1,5 @@
 import { TrueNASClient } from '../truenas-client.js';
+import { ToolDef, READ_ONLY, str, optStr } from './registry.js';
 import { formatBytes } from './utils.js';
 
 type AnyObj = Record<string, unknown>;
@@ -309,4 +310,88 @@ export async function datasetDetails(client: TrueNASClient, datasetId: string): 
     atime: prop('atime'),
     mountpoint: ds['mountpoint'] ?? null,
   }, null, 2);
+}
+
+// ── registry ───────────────────────────────────────────────────────────────────
+
+export function storageTools(client: TrueNASClient): ToolDef[] {
+  return [
+    {
+      tool: {
+        name: 'pool_list',
+        description: 'List all ZFS pools with their status, health, and capacity (size/allocated/free).',
+        inputSchema: { type: 'object', properties: {} },
+        annotations: READ_ONLY,
+      },
+      handler: () => poolList(client),
+    },
+    {
+      tool: {
+        name: 'pool_details',
+        description: 'Get full details for a single ZFS pool: health, capacity, last scrub, and all datasets with usage.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            pool_name: { type: 'string', description: 'Name of the pool, e.g. "media" or "apps"' },
+          },
+          required: ['pool_name'],
+        },
+        annotations: READ_ONLY,
+      },
+      handler: (args) => poolDetails(client, str(args, 'pool_name')),
+    },
+    {
+      tool: {
+        name: 'disk_list',
+        description: 'List all disks with model, type, pool assignment, temperature, SMART last result, and ZFS error counts.',
+        inputSchema: { type: 'object', properties: {} },
+        annotations: READ_ONLY,
+      },
+      handler: () => diskList(client),
+    },
+    {
+      tool: {
+        name: 'disk_details',
+        description: 'Full details for a single disk: serial, size, temperature, SMART test history, vdev assignment, and ZFS errors.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            disk_name: { type: 'string', description: 'Disk name, e.g. "sda" or "nvme0n1"' },
+          },
+          required: ['disk_name'],
+        },
+        annotations: READ_ONLY,
+      },
+      handler: (args) => diskDetails(client, str(args, 'disk_name')),
+    },
+    {
+      tool: {
+        name: 'dataset_list',
+        description: 'List all ZFS datasets with used/available space. Optionally filter by pool.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            pool_name: { type: 'string', description: 'Optional pool name to filter datasets, e.g. "media"' },
+          },
+        },
+        annotations: READ_ONLY,
+      },
+      handler: (args) => datasetList(client, optStr(args, 'pool_name')),
+    },
+    {
+      tool: {
+        name: 'dataset_details',
+        description: 'Get full properties for a single ZFS dataset: size, compression, dedup, quota, and more.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            dataset_id: { type: 'string', description: 'Dataset ID, e.g. "media/tv" or "apps/ix-applications"' },
+          },
+          required: ['dataset_id'],
+        },
+        annotations: READ_ONLY,
+      },
+      handler: (args) => datasetDetails(client, str(args, 'dataset_id')),
+    },
+  ];
 }

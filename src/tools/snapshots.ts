@@ -1,4 +1,5 @@
 import { TrueNASClient } from '../truenas-client.js';
+import { ToolDef, READ_ONLY, str, optStr, posInt } from './registry.js';
 import { formatBytes } from './utils.js';
 
 type AnyObj = Record<string, unknown>;
@@ -88,4 +89,47 @@ export async function snapshotDetails(client: TrueNASClient, snapshotId: string)
     compressratio: prop(p, 'compressratio'),
     clones: prop(p, 'clones') || null,
   }, null, 2);
+}
+
+// ── registry ───────────────────────────────────────────────────────────────────
+
+export function snapshotTools(client: TrueNASClient): ToolDef[] {
+  return [
+    {
+      tool: {
+        name: 'snapshot_list',
+        description: 'List ZFS snapshots ordered by most recent. Optionally filter by dataset.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            dataset_id: { type: 'string', description: 'Optional dataset to filter by, e.g. "media/tv"' },
+            limit: { type: 'number', description: 'Max number of snapshots to return (default 20)', default: 20 },
+            ignore_boot_pool: { type: 'boolean', description: 'Exclude boot-pool snapshots (default true)', default: true },
+          },
+        },
+        annotations: READ_ONLY,
+      },
+      handler: (args) => snapshotList(
+        client,
+        optStr(args, 'dataset_id'),
+        posInt(args, 'limit', 20),
+        args['ignore_boot_pool'] !== false,
+      ),
+    },
+    {
+      tool: {
+        name: 'snapshot_details',
+        description: 'Get full details for a specific ZFS snapshot.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            snapshot_id: { type: 'string', description: 'Snapshot ID as returned by snapshot_list, e.g. "media/tv@auto-2026-06-01"' },
+          },
+          required: ['snapshot_id'],
+        },
+        annotations: READ_ONLY,
+      },
+      handler: (args) => snapshotDetails(client, str(args, 'snapshot_id')),
+    },
+  ];
 }

@@ -1,0 +1,43 @@
+# Example Dockge / docker compose stack for running truenas-mcp on the NAS itself.
+#
+# Values in ${...} come from the stack's .env file:
+#   TRUENAS_API_KEY=...
+#   MCP_AUTH_TOKEN=...        # e.g. `openssl rand -hex 32`
+#   DOCKER_GID=...            # `stat -c %g /var/run/docker.sock` on the NAS
+
+services:
+  truenas-mcp:
+    image: ghcr.io/profanter-dev/truenas-mcp:latest
+    container_name: truenas-mcp
+    restart: unless-stopped
+    environment:
+      TRUENAS_HOST: 192.168.1.29:444      # TrueNAS web UI host:port, reachable from the container
+      TRUENAS_API_KEY: ${TRUENAS_API_KEY}
+      TRUENAS_INSECURE: "true"            # TrueNAS ships a self-signed certificate
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN}
+      DOCKER_WRITE_TOOLS: "false"         # "true" adds container_start/stop/restart and image_pull
+    volumes:
+      # Access to the Docker socket is root-equivalent on the host, and `:ro`
+      # does NOT change that (it only protects the socket file, not the API).
+      # The server limits itself to the endpoints its tools need — see
+      # src/docker-client.ts.
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - ${DOCKER_GID}
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - traefik_network
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.truenas-mcp.rule=Host(`truenas-mcp.example.com`)
+      - traefik.http.routers.truenas-mcp.entrypoints=websecure
+      - traefik.http.routers.truenas-mcp.tls.certresolver=letsencrypt
+      - traefik.http.services.truenas-mcp.loadbalancer.server.port=3000
+
+networks:
+  traefik_network:
+    external: true

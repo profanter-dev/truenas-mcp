@@ -1,0 +1,8 @@
+node_modules
+dist
+.env
+.git
+.github
+.claude
+*.md
+compose*.yml

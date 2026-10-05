@@ -1,4 +1,5 @@
 import { TrueNASClient } from '../truenas-client.js';
+import { ToolDef, READ_ONLY, str } from './registry.js';
 
 type AnyObj = Record<string, unknown>;
 
@@ -49,4 +50,36 @@ export async function shareDetails(client: TrueNASClient, type: string, id: numb
   }
 
   return JSON.stringify({ type, ...shares[0] }, null, 2);
+}
+
+// ── registry ───────────────────────────────────────────────────────────────────
+
+export function shareTools(client: TrueNASClient): ToolDef[] {
+  return [
+    {
+      tool: {
+        name: 'share_list',
+        description: 'List all configured SMB and NFS shares with their path, enabled state, and comment.',
+        inputSchema: { type: 'object', properties: {} },
+        annotations: READ_ONLY,
+      },
+      handler: () => shareList(client),
+    },
+    {
+      tool: {
+        name: 'share_details',
+        description: 'Get full details for a specific SMB or NFS share.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            type: { type: 'string', enum: ['smb', 'nfs'], description: 'Share protocol type' },
+            id: { type: 'number', description: 'Share ID as returned by share_list' },
+          },
+          required: ['type', 'id'],
+        },
+        annotations: READ_ONLY,
+      },
+      handler: (args) => shareDetails(client, str(args, 'type'), Number(args['id'])),
+    },
+  ];
 }
