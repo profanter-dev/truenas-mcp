@@ -1,7 +1,7 @@
 {
 	"name": "@profanter-dev/truenas-mcp",
-	"version": "1.0.6",
-	"description": "Read-only MCP server for TrueNAS SCALE 25.10+ — JSON-RPC 2.0 WebSocket",
+	"version": "1.0.7",
+	"description": "DEPRECATED — use the Docker image ghcr.io/profanter-dev/truenas-mcp. Read-only MCP server for TrueNAS SCALE 25.10+",
 	"author": "profanter-dev",
 	"license": "MIT",
 	"repository": {

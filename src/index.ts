@@ -370,6 +370,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 async function main() {
+  process.stderr.write(
+    '[truenas-mcp] DEPRECATED: the npm package is no longer maintained. ' +
+      'truenas-mcp 2.x runs as a Docker container: ghcr.io/profanter-dev/truenas-mcp ' +
+      '(see https://github.com/profanter-dev/truenas-mcp#readme).\n',
+  );
   await client.connect();
   process.stderr.write('[truenas-mcp] Connected and authenticated to TrueNAS.\n');
 

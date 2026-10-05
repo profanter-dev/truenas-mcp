@@ -1,5 +1,8 @@
 # truenas-mcp
 
+> [!WARNING]
+> **This npm package is deprecated and no longer maintained.** truenas-mcp 2.x runs as a Docker container on the NAS (Streamable HTTP, direct Docker socket access, container updates and diagnostics) and is published as **`ghcr.io/profanter-dev/truenas-mcp`**. See the [project README](https://github.com/profanter-dev/truenas-mcp#readme) for deployment and migration from 1.x.
+
 **Read-only MCP server for TrueNAS SCALE 25.10+** — connects via the JSON-RPC 2.0 WebSocket API.
 
 > **Why this exists:** The official `truenas/truenas-mcp` binary uses the legacy DDP protocol, which was removed in TrueNAS 25.10. This server targets the new `wss://host/api/current` JSON-RPC 2.0 endpoint exclusively.
