@@ -100,6 +100,29 @@ function endpointConfig(network: string, ep: AnyObj, containerId: string): AnyOb
   return out;
 }
 
+// Docker builds a container's env as the user's variables (in their order)
+// followed by the image's remaining defaults (in image order). Find that split
+// so user variables are kept even when they equal an image default — e.g. an
+// explicit POST=0 on a socket proxy must survive a new image changing it.
+export function userEnv(env: string[], imageEnv: string[]): string[] {
+  const key = (e: string) => e.split('=')[0];
+  for (let k = 0; k <= env.length; k++) {
+    const userKeys = new Set(env.slice(0, k).map(key));
+    const expected = imageEnv.filter((e) => !userKeys.has(key(e)));
+    const tail = env.slice(k);
+    if (tail.length === expected.length && tail.every((e, i) => e === expected[i])) {
+      // If no image default was left for Docker to append, every one of them was
+      // passed explicitly — typically an env copied wholesale by an earlier
+      // Watchtower/Dockhand-style recreate. Those copies can't be told apart
+      // from deliberate settings, so treat exact matches as image defaults.
+      if (k === env.length && imageEnv.length > 0) break;
+      return env.slice(0, k);
+    }
+  }
+  const img = new Set(imageEnv);
+  return env.filter((e) => !img.has(e));
+}
+
 // Builds a /containers/create body that reproduces `ins` on its image tag.
 // Inspect output has the *old image's* defaults merged in (ENV, labels, CMD, …);
 // copying those would pin them onto the new image, so they are dropped and the
@@ -114,8 +137,7 @@ export function buildCreateBody(
   const hc = structuredClone((ins['HostConfig'] as AnyObj | undefined) ?? {});
   const img = (oldImage['Config'] as AnyObj | undefined) ?? {};
 
-  const imgEnv = new Set((img['Env'] as string[] | null) ?? []);
-  cfg['Env'] = ((cfg['Env'] as string[] | null) ?? []).filter((e) => !imgEnv.has(e));
+  cfg['Env'] = userEnv((cfg['Env'] as string[] | null) ?? [], (img['Env'] as string[] | null) ?? []);
 
   const imgLabels = (img['Labels'] as Record<string, string> | null) ?? {};
   const labels = Object.fromEntries(
