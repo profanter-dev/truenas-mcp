@@ -18,6 +18,8 @@ import { serviceTools } from './tools/services.js';
 import { snapshotTools } from './tools/snapshots.js';
 import { containerTools } from './tools/containers.js';
 import { updateTools } from './tools/updates.js';
+import { diagnosticsTools } from './tools/diagnostics.js';
+import { HostProc } from './host-proc.js';
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
@@ -35,6 +37,7 @@ try {
 
 const client = new TrueNASClient(config.truenasHost, config.truenasApiKey, config.truenasInsecure);
 const docker = makeDockerClient(config.dockerSocket);
+const hostProc = HostProc.detect(config.hostProc);
 
 const tools: ToolDef[] = [
   ...systemTools(client),
@@ -47,6 +50,7 @@ const tools: ToolDef[] = [
   ...jobTools(client),
   ...(docker ? containerTools(docker, { write: config.dockerWriteTools }) : []),
   ...(docker ? updateTools(docker, { write: config.dockerWriteTools }) : []),
+  ...diagnosticsTools(docker, hostProc),
 ];
 
 // Hash both sides so timingSafeEqual gets equal-length inputs and the token
@@ -145,6 +149,9 @@ async function main() {
   } else {
     log(`Docker socket ${config.dockerSocket} not found — container tools disabled.`);
   }
+  log(hostProc
+    ? `Host processes readable via ${config.hostProc}.`
+    : `Host /proc not mounted at ${config.hostProc} — process_list limited to container processes.`);
 
   httpServer.listen(config.port, () => {
     log(`v${config.version} listening on :${config.port} (${tools.length} tools).`);

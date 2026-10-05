@@ -15,7 +15,7 @@
 import { DockerClient, normalizeRef } from '../docker-client.js';
 import { ToolDef, ToolArgs, str } from './registry.js';
 import { isSelf, primaryName, resolveContainer } from './containers.js';
-import { formatBytes } from './utils.js';
+import { formatBytes, mapLimit } from './utils.js';
 
 type AnyObj = Record<string, unknown>;
 
@@ -35,19 +35,6 @@ const nameOf = (ins: AnyObj) => String(ins['Name'] ?? '').replace(/^\//, '');
 const shortImage = (id: string) => id.replace(/^sha256:/, '').slice(0, 12);
 const timestamp = () => new Date().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '');
 const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const out: R[] = new Array(items.length);
-  let next = 0;
-  const worker = async () => {
-    while (next < items.length) {
-      const i = next++;
-      out[i] = await fn(items[i]);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return out;
-}
 
 // ── update_check ───────────────────────────────────────────────────────────────
 

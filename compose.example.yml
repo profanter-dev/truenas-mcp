@@ -15,13 +15,16 @@ services:
       TRUENAS_API_KEY: ${TRUENAS_API_KEY}
       TRUENAS_INSECURE: "true"            # TrueNAS ships a self-signed certificate
       MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN}
-      DOCKER_WRITE_TOOLS: "false"         # "true" adds container_start/stop/restart and image_pull
+      DOCKER_WRITE_TOOLS: "false"         # "true" adds start/stop/restart, update/rollback, image pull/prune
     volumes:
       # Access to the Docker socket is root-equivalent on the host, and `:ro`
       # does NOT change that (it only protects the socket file, not the API).
       # The server limits itself to the endpoints its tools need — see
       # src/docker-client.ts.
       - /var/run/docker.sock:/var/run/docker.sock
+      # Optional, read-only: lets process_list see all NAS processes (ZFS, SMB,
+      # middleware) with current CPU, map them to containers, and report ZFS ARC.
+      - /proc:/host/proc:ro
     group_add:
       - ${DOCKER_GID}
     read_only: true

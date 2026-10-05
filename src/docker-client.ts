@@ -23,6 +23,8 @@ const ALLOWED: ReadonlyArray<readonly [string, RegExp]> = [
   ['GET', /^\/containers\/json$/],
   ['GET', new RegExp(`^/containers/${ID}/json$`)],
   ['GET', new RegExp(`^/containers/${ID}/logs$`)],
+  ['GET', new RegExp(`^/containers/${ID}/stats$`)],
+  ['GET', new RegExp(`^/containers/${ID}/top$`)],
   ['POST', new RegExp(`^/containers/${ID}/(start|stop|restart)$`)],
   ['POST', /^\/images\/create$/],
   ['GET', new RegExp(`^/images/${REF}/json$`)],
@@ -78,6 +80,13 @@ function errorMessage(res: RawResponse): string {
 export class DockerClient {
   constructor(private readonly socketPath: string) {}
 
+  private assertAllowed(method: string, path: string): void {
+    const traversal = path.includes('..') || path.includes('//');
+    if (traversal || !ALLOWED.some(([m, re]) => m === method && re.test(path))) {
+      throw new Error(`Docker API call not permitted: ${method} ${path}`);
+    }
+  }
+
   private async request(
     method: string,
     path: string,
@@ -85,10 +94,7 @@ export class DockerClient {
     timeoutMs = 30_000,
     body?: unknown,
   ): Promise<RawResponse> {
-    const traversal = path.includes('..') || path.includes('//');
-    if (traversal || !ALLOWED.some(([m, re]) => m === method && re.test(path))) {
-      throw new Error(`Docker API call not permitted: ${method} ${path}`);
-    }
+    this.assertAllowed(method, path);
     const payload = body === undefined ? undefined : JSON.stringify(body);
 
     const qs = new URLSearchParams(Object.entries(query).map(([k, v]) => [k, String(v)])).toString();
@@ -187,6 +193,47 @@ export class DockerClient {
       if (evt.status) lastStatus = evt.status;
     }
     return lastStatus;
+  }
+
+  // Reads `count` consecutive samples (one per second) from the streaming stats
+  // endpoint; the second sample's precpu_stats cover the interval since the first.
+  async statsSamples(id: string, count = 2): Promise<Array<Record<string, unknown>>> {
+    const path = `/containers/${id}/stats`;
+    this.assertAllowed('GET', path);
+    return new Promise((resolve, reject) => {
+      const samples: Array<Record<string, unknown>> = [];
+      let buf = '';
+      const req = http.request({ socketPath: this.socketPath, method: 'GET', path: `${path}?stream=true`, timeout: 15_000 }, (res) => {
+        if ((res.statusCode ?? 0) >= 400) {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => reject(new Error(errorMessage({ status: res.statusCode ?? 0, body: Buffer.concat(chunks) }))));
+          return;
+        }
+        res.on('data', (c: Buffer) => {
+          buf += c.toString('utf8');
+          let nl: number;
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, nl).trim();
+            buf = buf.slice(nl + 1);
+            if (line) samples.push(JSON.parse(line));
+            if (samples.length >= count) {
+              req.destroy();
+              return resolve(samples);
+            }
+          }
+        });
+        res.on('end', () => (samples.length ? resolve(samples) : reject(new Error('Stats stream ended without data'))));
+      });
+      req.on('timeout', () => req.destroy(new Error(`Docker stats timed out for ${id}`)));
+      req.on('error', (e) => { if (samples.length < count) reject(e); });
+      req.end();
+    });
+  }
+
+  // `ps` columns are fixed here; tools cannot pass their own ps arguments.
+  async top(id: string): Promise<{ Titles: string[]; Processes: string[][] }> {
+    return this.getJson(`/containers/${id}/top`, { ps_args: '-eo pid,ppid,user,pcpu,pmem,rss,nlwp,etime,stat,args' });
   }
 
   async inspectImage(ref: string) {

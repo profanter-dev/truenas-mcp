@@ -6,6 +6,7 @@ export interface Config {
   port: number;
   dockerSocket: string;
   dockerWriteTools: boolean;
+  hostProc: string;
   version: string;
 }
 
@@ -28,6 +29,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     port,
     dockerSocket: env['DOCKER_SOCKET'] || '/var/run/docker.sock',
     dockerWriteTools: env['DOCKER_WRITE_TOOLS'] === 'true',
+    hostProc: env['HOST_PROC'] || '/host/proc',
     version: env['APP_VERSION'] || 'dev',
   };
 }
