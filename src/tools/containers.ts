@@ -52,7 +52,7 @@ function notFound(nameOrId: string): string {
 // /var/lib/docker/containers/<id>/, which shows up in mountinfo. Falls back to
 // the default hostname (short ID) if mountinfo is unavailable.
 let selfId: string | null | undefined;
-function ownContainerId(): string | null {
+export function ownContainerId(): string | null {
   if (selfId !== undefined) return selfId;
   try {
     const m = readFileSync('/proc/self/mountinfo', 'utf8').match(/\/containers\/([0-9a-f]{64})\//);

@@ -4,7 +4,7 @@
 import { DockerClient } from '../docker-client.js';
 import { HostProc, CLK_TCK, ProcSample } from '../host-proc.js';
 import { ToolDef, ToolArgs, READ_ONLY, optStr, posInt } from './registry.js';
-import { primaryName, resolveContainer } from './containers.js';
+import { ownContainerId, primaryName, resolveContainer } from './containers.js';
 import { formatBytes, formatDuration, mapLimit } from './utils.js';
 
 type AnyObj = Record<string, unknown>;
@@ -154,8 +154,10 @@ async function hostProcessList(hp: HostProc, docker: DockerClient | null, sort: 
   // Attribute every process to a container (or the host) for the per-container rollup.
   const owners = new Map<number, string>();
   await mapLimit([...procs2.keys()], 64, async (pid) => {
-    const id = await hp.containerId(pid);
-    owners.set(pid, id ? names.get(id) ?? id.slice(0, 12) : 'host');
+    const found = await hp.containerId(pid);
+    const id = found === 'self' ? ownContainerId() : found;
+    owners.set(pid, id ? names.get(id) ?? names.get([...names.keys()].find((k) => k.startsWith(id)) ?? '') ?? id.slice(0, 12)
+      : found === 'self' ? 'truenas-mcp' : 'host');
   });
 
   const cpuOf = (p: ProcSample) => {

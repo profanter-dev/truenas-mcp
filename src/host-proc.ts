@@ -94,10 +94,16 @@ export class HostProc {
     return m ? Number(m[1]) : null;
   }
 
-  // Docker container ID from the process's cgroup (systemd or cgroupfs driver).
-  async containerId(pid: number): Promise<string | null> {
+  // Docker container ID from the process's cgroup. Paths vary by cgroup driver
+  // ("/system.slice/docker-<id>.scope" vs "/docker/<id>") and, because we run
+  // in our own cgroup namespace, are shown relative to our cgroup: siblings
+  // appear as "/../<id>" and our own processes as just "/" (returned as 'self').
+  async containerId(pid: number): Promise<string | 'self' | null> {
     const cg = await this.read(`${pid}/cgroup`).catch(() => '');
-    return /docker[-/]([0-9a-f]{64})/.exec(cg)?.[1] ?? null;
+    const v2 = cg.split('\n').find((l) => l.startsWith('0::'))?.slice(3).trim();
+    const id = /([0-9a-f]{64})/.exec(cg)?.[1];
+    if (id) return id;
+    return v2 === '/' ? 'self' : null;
   }
 
   async uptimeSec(): Promise<number> {
