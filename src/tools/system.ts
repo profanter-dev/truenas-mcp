@@ -1,4 +1,5 @@
 import { TrueNASClient } from '../truenas-client.js';
+import { ToolDef, READ_ONLY } from './registry.js';
 import { formatBytes } from './utils.js';
 
 type AnyObj = Record<string, unknown>;
@@ -36,4 +37,20 @@ export async function systemInfo(client: TrueNASClient): Promise<string> {
     boot_time: parseTs(info['boottime']),
     timezone: info['timezone'],
   }, null, 2);
+}
+
+// ── registry ───────────────────────────────────────────────────────────────────
+
+export function systemTools(client: TrueNASClient): ToolDef[] {
+  return [
+    {
+      tool: {
+        name: 'system_info',
+        description: 'Get TrueNAS system information: hostname, version, CPU, memory, uptime, load average, and timezone.',
+        inputSchema: { type: 'object', properties: {} },
+        annotations: READ_ONLY,
+      },
+      handler: () => systemInfo(client),
+    },
+  ];
 }

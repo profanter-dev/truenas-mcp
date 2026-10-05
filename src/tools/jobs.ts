@@ -1,4 +1,5 @@
 import { TrueNASClient } from '../truenas-client.js';
+import { ToolDef, READ_ONLY, str, posInt } from './registry.js';
 
 type AnyObj = Record<string, unknown>;
 
@@ -126,4 +127,36 @@ export async function jobHistory(client: TrueNASClient, description: string, lim
   });
 
   return JSON.stringify({ description: matchedDescription, runs: result }, null, 2);
+}
+
+// ── registry ───────────────────────────────────────────────────────────────────
+
+export function jobTools(client: TrueNASClient): ToolDef[] {
+  return [
+    {
+      tool: {
+        name: 'job_list',
+        description: 'List all unique TrueNAS jobs with their last run status and timestamp. Use job_history to drill into a specific job\'s full run history.',
+        inputSchema: { type: 'object', properties: {} },
+        annotations: READ_ONLY,
+      },
+      handler: () => jobList(client),
+    },
+    {
+      tool: {
+        name: 'job_history',
+        description: 'Get the run history for a specific job, identified by its description (as returned by job_list).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            description: { type: 'string', description: 'Job description as shown in job_list, e.g. "Update LED status"' },
+            limit: { type: 'number', description: 'Number of runs to return (default 5)', default: 5 },
+          },
+          required: ['description'],
+        },
+        annotations: READ_ONLY,
+      },
+      handler: (args) => jobHistory(client, str(args, 'description'), posInt(args, 'limit', 5)),
+    },
+  ];
 }

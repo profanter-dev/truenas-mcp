@@ -6,36 +6,44 @@ on:
       - "v*"
 
 jobs:
-  publish:
+  image:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      id-token: write
+      packages: write
     steps:
       - uses: actions/checkout@v7
 
-      # No registry-url here: it writes a .yarnrc containing ${NODE_AUTH_TOKEN},
-      # and setup-node v7 dropped the dummy export of that variable, so any yarn
-      # command reading that config fails with "Failed to replace env in config".
-      - uses: actions/setup-node@v7
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
         with:
-          node-version: 24
-          cache: yarn
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - run: yarn install --frozen-lockfile
-
-      - run: yarn build
-
-      # Registry auth is only needed for the publish itself. Publishing uses npm
-      # Trusted Publishing (OIDC) via the id-token permission above — no token.
-      - uses: actions/setup-node@v7
+      - id: meta
+        uses: docker/metadata-action@v6
         with:
-          node-version: 24
-          registry-url: https://registry.npmjs.org
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+          flavor: |
+            latest=auto
 
-      - run: npm install -g npm@latest
-
-      - run: npm publish --access public
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ steps.meta.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3

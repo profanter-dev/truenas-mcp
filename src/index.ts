@@ -1,389 +1,167 @@
-#!/usr/bin/env node
-
 import 'dotenv/config';
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-  Tool,
-} from '@modelcontextprotocol/sdk/types.js';
+import http, { IncomingMessage, ServerResponse } from 'node:http';
+import { createHash, timingSafeEqual } from 'node:crypto';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 
+import { loadConfig, Config } from './config.js';
 import { TrueNASClient } from './truenas-client.js';
-import { poolList, poolDetails, diskList, diskDetails, datasetList, datasetDetails } from './tools/storage.js';
-import { jobList, jobHistory } from './tools/jobs.js';
-import { alertList } from './tools/alerts.js';
-import { shareList, shareDetails } from './tools/shares.js';
-import { systemInfo } from './tools/system.js';
-import { appList, appDetails, appLogs } from './tools/apps.js';
-import { serviceList, serviceDetails } from './tools/services.js';
-import { snapshotList, snapshotDetails } from './tools/snapshots.js';
-import { containerList, containerDetails, containerLogs } from './tools/containers.js';
 import { makeDockerClient } from './docker-client.js';
+import { createMcpServer } from './server.js';
+import { ToolDef } from './tools/registry.js';
+import { storageTools } from './tools/storage.js';
+import { jobTools } from './tools/jobs.js';
+import { alertTools } from './tools/alerts.js';
+import { shareTools } from './tools/shares.js';
+import { systemTools } from './tools/system.js';
+import { appTools } from './tools/apps.js';
+import { serviceTools } from './tools/services.js';
+import { snapshotTools } from './tools/snapshots.js';
+import { containerTools } from './tools/containers.js';
+import { updateTools } from './tools/updates.js';
+import { diagnosticsTools } from './tools/diagnostics.js';
+import { HostProc } from './host-proc.js';
 
-const host = process.env['TRUENAS_HOST'];
-const apiKey = process.env['TRUENAS_API_KEY'];
-const insecure = process.env['TRUENAS_INSECURE'] === 'true';
+const MAX_BODY_BYTES = 1024 * 1024;
 
-if (!host || !apiKey) {
-  process.stderr.write(
-    'Error: TRUENAS_HOST and TRUENAS_API_KEY environment variables must be set\n',
-  );
+function log(msg: string) {
+  process.stderr.write(`[truenas-mcp] ${msg}\n`);
+}
+
+let config: Config;
+try {
+  config = loadConfig();
+} catch (e) {
+  log(`Fatal: ${e instanceof Error ? e.message : String(e)}`);
   process.exit(1);
 }
 
-const client = new TrueNASClient(host, apiKey, insecure);
-const docker = makeDockerClient();
+const client = new TrueNASClient(config.truenasHost, config.truenasApiKey, config.truenasInsecure);
+const docker = makeDockerClient(config.dockerSocket);
+const hostProc = HostProc.detect(config.hostProc);
 
-const server = new Server(
-  { name: 'truenas-mcp', version: '0.1.0' },
-  { capabilities: { tools: {} } },
-);
-
-const TOOLS: Tool[] = [
-  {
-    name: 'pool_list',
-    description: 'List all ZFS pools with their status, health, and capacity (size/allocated/free).',
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'pool_details',
-    description: 'Get full details for a single ZFS pool: health, capacity, last scrub, and all datasets with usage.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        pool_name: { type: 'string', description: 'Name of the pool, e.g. "media" or "apps"' },
-      },
-      required: ['pool_name'],
-    },
-  },
-  {
-    name: 'disk_list',
-    description: 'List all disks with model, type, pool assignment, temperature, SMART last result, and ZFS error counts.',
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'disk_details',
-    description: 'Full details for a single disk: serial, size, temperature, SMART test history, vdev assignment, and ZFS errors.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        disk_name: { type: 'string', description: 'Disk name, e.g. "sda" or "nvme0n1"' },
-      },
-      required: ['disk_name'],
-    },
-  },
-  {
-    name: 'dataset_list',
-    description: 'List all ZFS datasets with used/available space. Optionally filter by pool.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        pool_name: { type: 'string', description: 'Optional pool name to filter datasets, e.g. "media"' },
-      },
-    },
-  },
-  {
-    name: 'dataset_details',
-    description: 'Get full properties for a single ZFS dataset: size, compression, dedup, quota, and more.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        dataset_id: { type: 'string', description: 'Dataset ID, e.g. "media/tv" or "apps/ix-applications"' },
-      },
-      required: ['dataset_id'],
-    },
-  },
-  {
-    name: 'job_list',
-    description: 'List all unique TrueNAS jobs with their last run status and timestamp. Use job_history to drill into a specific job\'s full run history.',
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'job_history',
-    description: 'Get the run history for a specific job, identified by its description (as returned by job_list).',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        description: { type: 'string', description: 'Job description as shown in job_list, e.g. "Update LED status"' },
-        limit: { type: 'number', description: 'Number of runs to return (default 5)', default: 5 },
-      },
-      required: ['description'],
-    },
-  },
-  {
-    name: 'system_info',
-    description: 'Get TrueNAS system information: hostname, version, CPU, memory, uptime, load average, and timezone.',
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'service_list',
-    description: 'List all TrueNAS services (SMB, NFS, SSH, etc.) with their running state and whether they are enabled at boot.',
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'service_details',
-    description: 'Get full details for a specific TrueNAS service.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        service_name: { type: 'string', description: 'Service name as shown in service_list, e.g. "cifs", "nfs", "ssh"' },
-      },
-      required: ['service_name'],
-    },
-  },
-  {
-    name: 'snapshot_list',
-    description: 'List ZFS snapshots ordered by most recent. Optionally filter by dataset.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        dataset_id: { type: 'string', description: 'Optional dataset to filter by, e.g. "media/tv"' },
-        limit: { type: 'number', description: 'Max number of snapshots to return (default 20)', default: 20 },
-        ignore_boot_pool: { type: 'boolean', description: 'Exclude boot-pool snapshots (default true)', default: true },
-      },
-    },
-  },
-  {
-    name: 'snapshot_details',
-    description: 'Get full details for a specific ZFS snapshot.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        snapshot_id: { type: 'string', description: 'Snapshot ID as returned by snapshot_list, e.g. "media/tv@auto-2026-06-01"' },
-      },
-      required: ['snapshot_id'],
-    },
-  },
-  {
-    name: 'app_list',
-    description: 'List all installed TrueNAS apps with their state, version, and whether an update is available.',
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'app_details',
-    description: 'Get full details for a single TrueNAS app: state, version, portals, active workloads, and notes.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        app_name: { type: 'string', description: 'App name as shown in app_list, e.g. "actual-budget"' },
-      },
-      required: ['app_name'],
-    },
-  },
-  {
-    name: 'app_logs',
-    description: 'Retrieve recent log output for a TrueNAS app.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        app_name: { type: 'string', description: 'App name as shown in app_list' },
-        tail_lines: { type: 'number', description: 'Number of log lines to return (default 100)', default: 100 },
-      },
-      required: ['app_name'],
-    },
-  },
-  {
-    name: 'share_list',
-    description: 'List all configured SMB and NFS shares with their path, enabled state, and comment.',
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'share_details',
-    description: 'Get full details for a specific SMB or NFS share.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        type: { type: 'string', enum: ['smb', 'nfs'], description: 'Share protocol type' },
-        id: { type: 'number', description: 'Share ID as returned by share_list' },
-      },
-      required: ['type', 'id'],
-    },
-  },
-  {
-    name: 'alert_list',
-    description: 'List all active TrueNAS alerts sorted by severity (CRITICAL → WARNING → INFO). Datetimes shown in Europe/Rome timezone.',
-    inputSchema: { type: 'object', properties: {} },
-  },
+const tools: ToolDef[] = [
+  ...systemTools(client),
+  ...alertTools(client),
+  ...storageTools(client),
+  ...snapshotTools(client),
+  ...shareTools(client),
+  ...serviceTools(client),
+  ...appTools(client),
+  ...jobTools(client),
+  ...(docker ? containerTools(docker, { write: config.dockerWriteTools }) : []),
+  ...(docker ? updateTools(docker, { write: config.dockerWriteTools }) : []),
+  ...diagnosticsTools(docker, hostProc),
 ];
 
-const DOCKER_TOOLS: Tool[] = [
-  {
-    name: 'container_list',
-    description: 'List all Docker containers (running and stopped) with their state and health status. Requires DOCKER_PROXY_URL to be configured.',
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'container_details',
-    description: 'Full details for a single Docker container: image, state, ports, mounts, networks, labels. Environment variables with secrets are redacted.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        name_or_id: { type: 'string', description: 'Container name or short ID as shown in container_list' },
-      },
-      required: ['name_or_id'],
-    },
-  },
-  {
-    name: 'container_logs',
-    description: 'Retrieve recent log output for a Docker container.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        name_or_id: { type: 'string', description: 'Container name or short ID' },
-        tail: { type: 'number', description: 'Number of log lines to return (default 100)', default: 100 },
-      },
-      required: ['name_or_id'],
-    },
-  },
-];
+// Hash both sides so timingSafeEqual gets equal-length inputs and the token
+// length doesn't leak through timing either.
+const tokenDigest = createHash('sha256').update(config.authToken).digest();
+function authorized(req: IncomingMessage): boolean {
+  const header = req.headers['authorization'] ?? '';
+  const match = /^Bearer (.+)$/.exec(header);
+  if (!match) return false;
+  return timingSafeEqual(createHash('sha256').update(match[1]).digest(), tokenDigest);
+}
 
-const allTools = docker ? [...TOOLS, ...DOCKER_TOOLS] : TOOLS;
+function sendJson(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) {
+  res.writeHead(status, { 'Content-Type': 'application/json', ...headers });
+  res.end(JSON.stringify(body));
+}
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: allTools }));
+function jsonRpcError(res: ServerResponse, status: number, code: number, message: string, headers?: Record<string, string>) {
+  sendJson(res, status, { jsonrpc: '2.0', error: { code, message }, id: null }, headers);
+}
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on('data', (c: Buffer) => {
+      size += c.length;
+      if (size > MAX_BODY_BYTES) {
+        reject(new Error('Request body too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
 
-  function ok(text: string) {
-    return { content: [{ type: 'text' as const, text }] };
-  }
-  function err(text: string) {
-    return { content: [{ type: 'text' as const, text }], isError: true };
-  }
-  async function run(fn: () => Promise<string>) {
-    try {
-      return ok(await fn());
-    } catch (e) {
-      return err(`Error: ${e instanceof Error ? e.message : String(e)}`);
-    }
+async function handleMcp(req: IncomingMessage, res: ServerResponse) {
+  if (!authorized(req)) {
+    return jsonRpcError(res, 401, -32001, 'Unauthorized', { 'WWW-Authenticate': 'Bearer' });
   }
 
-  switch (name) {
-    case 'pool_list':
-      return run(() => poolList(client));
-
-    case 'pool_details': {
-      const poolName = String((args as Record<string, unknown>)?.['pool_name'] ?? '');
-      return run(() => poolDetails(client, poolName));
-    }
-
-    case 'disk_list':
-      return run(() => diskList(client));
-
-    case 'disk_details': {
-      const diskName = String((args as Record<string, unknown>)?.['disk_name'] ?? '');
-      return run(() => diskDetails(client, diskName));
-    }
-
-    case 'dataset_list': {
-      const poolName = (args as Record<string, unknown>)?.['pool_name'] as string | undefined;
-      return run(() => datasetList(client, poolName));
-    }
-
-    case 'dataset_details': {
-      const datasetId = String((args as Record<string, unknown>)?.['dataset_id'] ?? '');
-      return run(() => datasetDetails(client, datasetId));
-    }
-
-    case 'system_info':
-      return run(() => systemInfo(client));
-
-    case 'service_list':
-      return run(() => serviceList(client));
-
-    case 'service_details': {
-      const serviceName = String((args as Record<string, unknown>)?.['service_name'] ?? '');
-      return run(() => serviceDetails(client, serviceName));
-    }
-
-    case 'snapshot_list': {
-      const a = args as Record<string, unknown>;
-      const datasetId = a?.['dataset_id'] as string | undefined;
-      const limit = Math.max(1, Number(a?.['limit']) || 20);
-      const ignoreBootPool = a?.['ignore_boot_pool'] !== false;
-      return run(() => snapshotList(client, datasetId, limit, ignoreBootPool));
-    }
-
-    case 'snapshot_details': {
-      const snapshotId = String((args as Record<string, unknown>)?.['snapshot_id'] ?? '');
-      return run(() => snapshotDetails(client, snapshotId));
-    }
-
-    case 'app_list':
-      return run(() => appList(client));
-
-    case 'app_details': {
-      const appName = String((args as Record<string, unknown>)?.['app_name'] ?? '');
-      return run(() => appDetails(client, appName));
-    }
-
-    case 'app_logs': {
-      const a = args as Record<string, unknown>;
-      const appName = String(a?.['app_name'] ?? '');
-      const tailLines = Math.max(1, Number(a?.['tail_lines']) || 100);
-      return run(() => appLogs(client, appName, tailLines));
-    }
-
-    case 'share_list':
-      return run(() => shareList(client));
-
-    case 'share_details': {
-      const type = String((args as Record<string, unknown>)?.['type'] ?? '');
-      const id = Number((args as Record<string, unknown>)?.['id']);
-      return run(() => shareDetails(client, type, id));
-    }
-
-    case 'job_list':
-      return run(() => jobList(client));
-
-    case 'job_history': {
-      const description = String((args as Record<string, unknown>)?.['description'] ?? '');
-      const limit = Math.max(1, Number((args as Record<string, unknown>)?.['limit']) || 5);
-      return run(() => jobHistory(client, description, limit));
-    }
-
-    case 'alert_list':
-      return run(() => alertList(client));
-
-    case 'container_list':
-      if (!docker) return err('Docker proxy not configured. Set DOCKER_PROXY_URL, DOCKER_PROXY_USER, DOCKER_PROXY_PASS.');
-      return run(() => containerList(docker));
-
-    case 'container_details': {
-      if (!docker) return err('Docker proxy not configured. Set DOCKER_PROXY_URL, DOCKER_PROXY_USER, DOCKER_PROXY_PASS.');
-      const nameOrId = String((args as Record<string, unknown>)?.['name_or_id'] ?? '');
-      return run(() => containerDetails(docker, nameOrId));
-    }
-
-    case 'container_logs': {
-      if (!docker) return err('Docker proxy not configured. Set DOCKER_PROXY_URL, DOCKER_PROXY_USER, DOCKER_PROXY_PASS.');
-      const a = args as Record<string, unknown>;
-      const nameOrId = String(a?.['name_or_id'] ?? '');
-      const tail = Math.max(1, Number(a?.['tail']) || 100);
-      return run(() => containerLogs(docker, nameOrId, tail));
-    }
-
-    default:
-      return err(`Unknown tool: ${name}`);
+  // Stateless mode: no sessions, so there is no SSE stream to GET or session to DELETE.
+  if (req.method !== 'POST') {
+    return jsonRpcError(res, 405, -32000, 'Method not allowed', { Allow: 'POST' });
   }
+
+  let body: unknown;
+  try {
+    body = JSON.parse(await readBody(req));
+  } catch (e) {
+    const tooLarge = e instanceof Error && e.message === 'Request body too large';
+    return jsonRpcError(res, tooLarge ? 413 : 400, -32700, tooLarge ? 'Request body too large' : 'Parse error');
+  }
+
+  // A fresh server + transport per request; the TrueNAS and Docker clients are shared.
+  const server = createMcpServer(tools, config.version);
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+  res.on('close', () => {
+    void transport.close();
+    void server.close();
+  });
+
+  await server.connect(transport);
+  await transport.handleRequest(req, res, body);
+}
+
+async function handleHealth(res: ServerResponse) {
+  const truenas = client.isConnected;
+  const dockerOk = docker ? await docker.ping() : null;
+  sendJson(res, truenas ? 200 : 503, { truenas, docker: dockerOk, version: config.version });
+}
+
+const httpServer = http.createServer((req, res) => {
+  const path = (req.url ?? '/').split('?')[0];
+
+  const handler = path === '/mcp' ? handleMcp(req, res)
+    : path === '/healthz' && req.method === 'GET' ? handleHealth(res)
+    : Promise.resolve(sendJson(res, 404, { error: 'Not found' }));
+
+  handler.catch((e) => {
+    log(`Request error: ${e instanceof Error ? e.message : String(e)}`);
+    if (!res.headersSent) jsonRpcError(res, 500, -32603, 'Internal error');
+    else res.end();
+  });
 });
 
 async function main() {
-  process.stderr.write(
-    '[truenas-mcp] DEPRECATED: the npm package is no longer maintained. ' +
-      'truenas-mcp 2.x runs as a Docker container: ghcr.io/profanter-dev/truenas-mcp ' +
-      '(see https://github.com/profanter-dev/truenas-mcp#readme).\n',
-  );
   await client.connect();
-  process.stderr.write('[truenas-mcp] Connected and authenticated to TrueNAS.\n');
+  log('Connected and authenticated to TrueNAS.');
 
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  if (docker) {
+    log(`Docker tools enabled via ${config.dockerSocket}${config.dockerWriteTools ? ' (write tools ON)' : ''}.`);
+  } else {
+    log(`Docker socket ${config.dockerSocket} not found — container tools disabled.`);
+  }
+  log(hostProc
+    ? `Host processes readable via ${config.hostProc}.`
+    : `Host /proc not mounted at ${config.hostProc} — process_list limited to container processes.`);
+
+  httpServer.listen(config.port, () => {
+    log(`v${config.version} listening on :${config.port} (${tools.length} tools).`);
+  });
 
   const shutdown = () => {
+    log('Shutting down.');
     client.disconnect();
-    process.exit(0);
+    httpServer.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 5_000).unref();
   };
 
   process.on('SIGINT', shutdown);
@@ -391,8 +169,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  process.stderr.write(
-    `[truenas-mcp] Fatal: ${err instanceof Error ? err.message : String(err)}\n`,
-  );
+  log(`Fatal: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 });

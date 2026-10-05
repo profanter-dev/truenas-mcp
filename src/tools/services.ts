@@ -1,4 +1,5 @@
 import { TrueNASClient } from '../truenas-client.js';
+import { ToolDef, READ_ONLY, str } from './registry.js';
 
 type AnyObj = Record<string, unknown>;
 
@@ -70,4 +71,35 @@ export async function serviceDetails(client: TrueNASClient, serviceName: string)
     pids: svc['pids'],
     ...(config ? { config } : {}),
   }, null, 2);
+}
+
+// ── registry ───────────────────────────────────────────────────────────────────
+
+export function serviceTools(client: TrueNASClient): ToolDef[] {
+  return [
+    {
+      tool: {
+        name: 'service_list',
+        description: 'List all TrueNAS services (SMB, NFS, SSH, etc.) with their running state and whether they are enabled at boot.',
+        inputSchema: { type: 'object', properties: {} },
+        annotations: READ_ONLY,
+      },
+      handler: () => serviceList(client),
+    },
+    {
+      tool: {
+        name: 'service_details',
+        description: 'Get full details for a specific TrueNAS service.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            service_name: { type: 'string', description: 'Service name as shown in service_list, e.g. "cifs", "nfs", "ssh"' },
+          },
+          required: ['service_name'],
+        },
+        annotations: READ_ONLY,
+      },
+      handler: (args) => serviceDetails(client, str(args, 'service_name')),
+    },
+  ];
 }

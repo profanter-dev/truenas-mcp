@@ -2,6 +2,10 @@ import WebSocket from 'ws';
 import { Agent } from 'https';
 import { randomUUID } from 'crypto';
 
+// TrueNAS drops WebSocket connections that stay idle for 60 s, so a cheap call
+// keeps the shared connection alive between tool calls.
+const KEEPALIVE_INTERVAL_MS = 30_000;
+
 interface PendingCall {
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
@@ -14,6 +18,7 @@ export class TrueNASClient {
   private connected = false;
   private reconnectDelay = 1000;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private keepaliveTimer: NodeJS.Timeout | null = null;
   private shuttingDown = false;
 
   constructor(
@@ -60,6 +65,7 @@ export class TrueNASClient {
         // cannot reach the socket before authentication completes (#7).
         this.authenticate().then(() => {
           this.connected = true;
+          this.startKeepalive();
           resolve();
         }).catch(reject);
       });
@@ -96,8 +102,28 @@ export class TrueNASClient {
     }
   }
 
+  private startKeepalive(): void {
+    this.stopKeepalive();
+    this.keepaliveTimer = setInterval(() => {
+      const ws = this.ws;
+      // A ping that times out means the connection is half-open; terminating
+      // it fires 'close', which runs the normal reconnect path.
+      this.rawCall('core.ping', []).catch((err: Error) => {
+        if (err.message.startsWith('Timed out') && ws === this.ws) ws?.terminate();
+      });
+    }, KEEPALIVE_INTERVAL_MS);
+  }
+
+  private stopKeepalive(): void {
+    if (this.keepaliveTimer) {
+      clearInterval(this.keepaliveTimer);
+      this.keepaliveTimer = null;
+    }
+  }
+
   private onClose(): void {
     this.connected = false;
+    this.stopKeepalive();
 
     for (const [id, p] of this.pending) {
       clearTimeout(p.timer);
@@ -150,6 +176,10 @@ export class TrueNASClient {
     });
   }
 
+  get isConnected(): boolean {
+    return this.connected;
+  }
+
   call<T = unknown>(method: string, params: unknown[] = []): Promise<T> {
     if (!this.connected) {
       return Promise.reject(new Error('Not connected to TrueNAS'));
@@ -159,6 +189,7 @@ export class TrueNASClient {
 
   disconnect(): void {
     this.shuttingDown = true;
+    this.stopKeepalive();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;

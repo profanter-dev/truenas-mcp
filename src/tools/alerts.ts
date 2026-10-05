@@ -1,4 +1,5 @@
 import { TrueNASClient } from '../truenas-client.js';
+import { ToolDef, READ_ONLY } from './registry.js';
 
 type AnyObj = Record<string, unknown>;
 
@@ -50,4 +51,20 @@ export async function alertList(client: TrueNASClient): Promise<string> {
   }));
 
   return JSON.stringify(formatted, null, 2);
+}
+
+// ── registry ───────────────────────────────────────────────────────────────────
+
+export function alertTools(client: TrueNASClient): ToolDef[] {
+  return [
+    {
+      tool: {
+        name: 'alert_list',
+        description: 'List all active TrueNAS alerts sorted by severity (CRITICAL → WARNING → INFO). Datetimes shown in Europe/Rome timezone.',
+        inputSchema: { type: 'object', properties: {} },
+        annotations: READ_ONLY,
+      },
+      handler: () => alertList(client),
+    },
+  ];
 }

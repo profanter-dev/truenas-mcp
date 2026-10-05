@@ -1,71 +1,75 @@
 # truenas-mcp
 
-> [!WARNING]
-> **This npm package is deprecated and no longer maintained.** truenas-mcp 2.x runs as a Docker container on the NAS (Streamable HTTP, direct Docker socket access, container updates and diagnostics) and is published as **`ghcr.io/profanter-dev/truenas-mcp`**. See the [project README](https://github.com/profanter-dev/truenas-mcp#readme) for deployment and migration from 1.x.
-
-**Read-only MCP server for TrueNAS SCALE 25.10+** — connects via the JSON-RPC 2.0 WebSocket API.
+**MCP server for TrueNAS SCALE 25.10+ and the Docker containers running on it.** Runs as a container on the NAS and serves MCP over Streamable HTTP. Talks to TrueNAS via the JSON-RPC 2.0 WebSocket API and to Docker via the local socket.
 
 > **Why this exists:** The official `truenas/truenas-mcp` binary uses the legacy DDP protocol, which was removed in TrueNAS 25.10. This server targets the new `wss://host/api/current` JSON-RPC 2.0 endpoint exclusively.
 
-> **READ-ONLY**: This server performs zero write or mutating operations.
+> **Read-only by default.** All TrueNAS tools are read-only. Docker write tools (start/stop/restart, update/rollback, image pull/prune) exist but are only registered when `DOCKER_WRITE_TOOLS=true`.
+
+> **Upgrading from 1.x?** The npm package `@profanter-dev/truenas-mcp` (stdio, `npx`) is deprecated. 2.x ships only as the container image `ghcr.io/profanter-dev/truenas-mcp` — see [Migrating from 1.x](#migrating-from-1x).
 
 ---
 
 ## Requirements
 
-- TrueNAS SCALE 25.10 or later
+- TrueNAS SCALE 25.10 or later, with Docker (e.g. stacks managed by Dockge)
 - A TrueNAS API key (generate in **System → API Keys**)
-- Node.js 18+
 
 ---
 
-## Install
+## Deploy
 
-```bash
-npm install -g @profanter-dev/truenas-mcp
+Deploy as a Dockge stack (or plain `docker compose`) on the NAS. A full example with Traefik labels is in [`compose.example.yml`](compose.example.yml):
+
+```yaml
+services:
+  truenas-mcp:
+    image: ghcr.io/profanter-dev/truenas-mcp:latest
+    restart: unless-stopped
+    environment:
+      TRUENAS_HOST: 192.168.1.29:444
+      TRUENAS_API_KEY: ${TRUENAS_API_KEY}
+      TRUENAS_INSECURE: "true"
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /proc:/host/proc:ro   # optional: host processes for process_list
+    group_add:
+      - ${DOCKER_GID}   # stat -c %g /var/run/docker.sock
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
 ```
 
-Or run without installing:
+The image runs as the unprivileged `node` user; `group_add` gives it access to the Docker socket. Generate the bearer token with `openssl rand -hex 32`.
 
-```bash
-npx @profanter-dev/truenas-mcp
-```
+`GET /healthz` (unauthenticated) reports `{ truenas, docker, version }` and backs the image's `HEALTHCHECK`.
 
 ---
 
 ## Configuration
 
-### TrueNAS (required)
-
-| Variable | Required | Description |
-|---|---|---|
-| `TRUENAS_HOST` | ✓ | `host:port`, e.g. `192.168.1.29:444` |
-| `TRUENAS_API_KEY` | ✓ | TrueNAS API key |
-| `TRUENAS_INSECURE` | | `true` to skip TLS certificate verification (self-signed certs) |
-
-### Docker proxy (optional)
-
-Enables `container_list`, `container_details`, and `container_logs`. See [Docker proxy setup](#docker-proxy-setup) below.
-
-| Variable | Required | Description |
-|---|---|---|
-| `DOCKER_PROXY_URL` | ✓ | Base URL of the docker-socket-proxy, e.g. `https://docker.example.com` |
-| `DOCKER_PROXY_USER` | ✓ | Basic auth username |
-| `DOCKER_PROXY_PASS` | ✓ | Basic auth password |
-
-Copy `.env.example` to `.env` and fill in your values, or pass as environment variables.
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `TRUENAS_HOST` | ✓ | | `host:port` of the TrueNAS web UI, e.g. `192.168.1.29:444` |
+| `TRUENAS_API_KEY` | ✓ | | TrueNAS API key |
+| `TRUENAS_INSECURE` | | `false` | `true` to skip TLS certificate verification (self-signed certs) |
+| `MCP_AUTH_TOKEN` | ✓ | | Bearer token clients must send to `/mcp` |
+| `PORT` | | `3000` | HTTP port |
+| `DOCKER_SOCKET` | | `/var/run/docker.sock` | Container tools are disabled if the socket is missing |
+| `DOCKER_WRITE_TOOLS` | | `false` | `true` registers the Docker write tools (see below) |
+| `HOST_PROC` | | `/host/proc` | Where the host's `/proc` is mounted read-only; enables host-wide `process_list` |
 
 ---
 
 ## Claude Code setup
 
 ```bash
-claude mcp add truenas \
-  -e TRUENAS_HOST=192.168.1.29:444 \
-  -e TRUENAS_API_KEY=your-key \
-  -e TRUENAS_INSECURE=true \
-  -- npx @profanter-dev/truenas-mcp
+claude mcp add --transport http truenas https://truenas-mcp.example.com/mcp \
+  --header "Authorization: Bearer <MCP_AUTH_TOKEN>"
 ```
+
+Or on the LAN without Traefik, publish the port (`ports: ["3000:3000"]`) and use `http://<nas-ip>:3000/mcp`.
 
 ---
 
@@ -114,9 +118,9 @@ All entities follow a consistent **list / details** pattern.
 | `app_details` | Single app: state, version, portals, active workloads, notes |
 | `app_logs` | Recent log output for a TrueNAS catalog app |
 
-> **Note:** These tools cover apps installed via the TrueNAS Apps UI (catalog apps). Docker Compose stacks managed by external tools such as Dockge are not accessible through the TrueNAS WebSocket API — use the Docker proxy tools below instead.
+> **Note:** These tools cover apps installed via the TrueNAS Apps UI (catalog apps). Docker Compose stacks managed by external tools such as Dockge are not visible through the TrueNAS WebSocket API — use the container tools below instead.
 
-### Docker containers *(optional — requires Docker proxy)*
+### Docker containers
 
 | Tool | Description |
 |---|---|
@@ -124,7 +128,48 @@ All entities follow a consistent **list / details** pattern.
 | `container_details` | Single container: image, state, ports, mounts, networks, labels. Secret env vars are redacted. |
 | `container_logs` | Recent log output for a container; configurable line count (default 100) |
 
-These tools are only registered when `DOCKER_PROXY_URL` is set.
+Registered when the Docker socket is mounted.
+
+### Updates
+
+| Tool | Description |
+|---|---|
+| `update_check` | For every container, compares the digest of the image it runs with the registry's current digest for its tag. Read-only. |
+
+### Diagnostics
+
+| Tool | Description |
+|---|---|
+| `container_stats` | Live usage per running container, sorted by CPU: CPU % (100 = one core), memory working set / page cache / limit, PIDs, network and disk IO rates and totals |
+| `process_list` | Top processes by current CPU or memory, each attributed to its container or `host`; CPU summed per container; host summary with CPU breakdown (user/system/iowait/steal), load, memory incl. **ZFS ARC**, swap, pressure stall info, uninterruptible/zombie counts. Command lines are redacted. |
+
+`process_list` needs the host's `/proc` mounted read-only (`/proc:/host/proc:ro`). Without it, it falls back to per-container `ps` output (container processes only, lifetime-average CPU).
+
+### Docker write tools *(opt-in: `DOCKER_WRITE_TOOLS=true`)*
+
+| Tool | Description |
+|---|---|
+| `container_start` | Start a stopped container |
+| `container_stop` | Stop a container (optional graceful `timeout`) |
+| `container_restart` | Restart a container (optional graceful `timeout`) |
+| `image_pull` | Pull the latest version of a container's image without recreating it |
+| `container_update` | Update one container or `all` running ones: pull, recreate with the same configuration, verify health (see below) |
+| `container_rollback` | Swap back to the old container kept by a failed update (or `keep_old`). Deletes nothing. |
+| `image_prune` | Delete dangling images, or with `all=true` every unused image |
+
+Stop/restart/update refuse to act on the MCP server's own container. Write tools carry MCP `destructiveHint` annotations so clients can ask for confirmation.
+
+#### How `container_update` works
+
+Containers are recreated from their own configuration via the Docker API — no compose files needed, and Dockge still sees them as part of their stack:
+
+1. Pull the tag; stop if the image is unchanged (unless `force`).
+2. Build the new container from the old one's config, dropping values inherited from the *old* image (ENV, labels, CMD, …) so the new image's defaults apply. Auto-assigned MAC addresses and hostnames are not copied; anonymous volumes are re-attached by name.
+3. Stop dependents sharing its network (`network_mode: service:X`), stop it, rename it to `<name>-old-<timestamp>`, create and start the new one.
+4. Wait until it is healthy (healthcheck) or stays up for 10 s (no healthcheck).
+5. Recreate the dependents against the new container, then delete the old containers.
+
+**Rollback is only automatic when the new version never ran** — Docker refused to create or start it (port in use, missing mount, …). If it started and then crashed, turned unhealthy or timed out, it may already have migrated data, so it is **left untouched (not even stopped)** and the old container is kept stopped as `<name>-old-<timestamp>`. Inspect its logs (included in the result) and fix forward, or call `container_rollback` deliberately.
 
 ### Jobs & Alerts
 
@@ -136,59 +181,41 @@ These tools are only registered when `DOCKER_PROXY_URL` is set.
 
 ---
 
-## Docker proxy setup
+## Security
 
-The Docker container tools connect to a `tecnativa/docker-socket-proxy` instance secured behind Traefik with basic auth. Deploy this as a Dockge stack on your TrueNAS:
+Access to the Docker socket is root-equivalent on the host, and mounting it `:ro` does **not** change that — it only protects the socket file, not the API behind it. This server is therefore the security boundary:
 
-```yaml
-# docker-socket-proxy/compose.yml
-services:
-  docker-proxy:
-    image: tecnativa/docker-socket-proxy:latest
-    environment:
-      CONTAINERS: "1"
-      INFO: "1"
-      IMAGES: "1"
-      NETWORKS: "1"
-      POST: "0"   # read-only — block all write operations
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    networks:
-      - traefik_network
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.docker-proxy.rule=Host(`docker.example.com`)"
-      - "traefik.http.routers.docker-proxy.entrypoints=websecure"
-      - "traefik.http.routers.docker-proxy.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.docker-proxy.middlewares=docker-proxy-auth"
-      - "traefik.http.middlewares.docker-proxy-auth.basicauth.users=admin:$$apr1$$..."
-      - "traefik.http.services.docker-proxy.loadbalancer.server.port=2375"
-    restart: unless-stopped
+- [`src/docker-client.ts`](src/docker-client.ts) checks every request against a fixed allowlist of method + path (read endpoints, start/stop/restart, image pull/prune, and the create/rename/delete steps of an update). Query strings are built internally; there is no generic passthrough, exec, build, volume or network access.
+- `/containers/create` is only reached through the update path, whose body is always derived from an existing container's inspect output — tool arguments can't supply container configuration, mounts or privileges. Containers are never deleted with their volumes.
+- The `/proc` mount is read-only; process command lines are redacted for passwords, tokens and URL credentials.
+- `/mcp` requires the bearer token; comparison is constant-time.
+- Run the container read-only, without capabilities, as non-root (see the compose example), and keep it behind TLS (e.g. Traefik) if it is reachable beyond the LAN.
 
-networks:
-  traefik_network:
-    external: true
-```
+---
 
-Generate the htpasswd entry (double `$` signs are required in compose labels):
+## Development
 
 ```bash
-# Install apache2-utils if needed, then:
-htpasswd -nb admin yourpassword | sed 's/\$/\$\$/g'
+cp .env.example .env   # fill in values
+yarn install
+yarn dev               # tsx src/index.ts, serves on :3000
+docker build --build-arg APP_VERSION=dev -t truenas-mcp:dev .
 ```
 
-Then set the env vars when registering the MCP server:
+Releases: pushing a `v*` tag builds and publishes `ghcr.io/profanter-dev/truenas-mcp` (`X.Y.Z`, `X.Y`, `X`, `latest`) and creates a GitHub release.
 
-```bash
-claude mcp add truenas \
-  -e TRUENAS_HOST=192.168.1.29:444 \
-  -e TRUENAS_API_KEY=your-key \
-  -e TRUENAS_INSECURE=true \
-  -e DOCKER_PROXY_URL=https://docker.example.com \
-  -e DOCKER_PROXY_USER=admin \
-  -e DOCKER_PROXY_PASS=yourpassword \
-  -- npx @profanter-dev/truenas-mcp
-```
+---
+
+## Migrating from 1.x
+
+1. Deploy the container as above (the docker-socket-proxy stack is no longer needed).
+2. Replace the stdio registration:
+   ```bash
+   claude mcp remove truenas
+   claude mcp add --transport http truenas https://truenas-mcp.example.com/mcp \
+     --header "Authorization: Bearer <MCP_AUTH_TOKEN>"
+   ```
+3. `DOCKER_PROXY_URL` / `DOCKER_PROXY_USER` / `DOCKER_PROXY_PASS` are gone; the socket mount replaces them.
 
 ---
 
@@ -197,4 +224,4 @@ claude mcp add truenas \
 - WebSocket URL: `wss://<host>/api/current`
 - Auth: `auth.login_with_api_key` — called once on connect; never reconnects per-call
 - Rate limit: TrueNAS enforces 20 auth attempts per 60 s; exceeding triggers a 10-minute lockout
-- The server maintains a single persistent connection with exponential-backoff reconnection on unexpected disconnects
+- The server maintains a single persistent connection, shared by all MCP clients, with exponential-backoff reconnection on unexpected disconnects
