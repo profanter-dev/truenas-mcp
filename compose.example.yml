@@ -16,6 +16,7 @@ services:
       TRUENAS_INSECURE: "true"            # TrueNAS ships a self-signed certificate
       MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN}
       DOCKER_WRITE_TOOLS: "false"         # "true" adds start/stop/restart, update/rollback, image pull/prune
+      STACKS_DIR: /mnt/apps/stacks        # optional, see the stacks mount below
     volumes:
       # Access to the Docker socket is root-equivalent on the host, and `:ro`
       # does NOT change that (it only protects the socket file, not the API).
@@ -25,6 +26,10 @@ services:
       # Optional, read-only: lets process_list see all NAS processes (ZFS, SMB,
       # middleware) with current CPU, map them to containers, and report ZFS ARC.
       - /proc:/host/proc:ro
+      # Optional, read-only: compose files for stack_list / stack_compose. Mount
+      # at the same path as on the host so the paths in compose labels resolve.
+      # Only compose files and .env key names are ever read.
+      - /mnt/apps/stacks:/mnt/apps/stacks:ro
     group_add:
       - ${DOCKER_GID}
     read_only: true

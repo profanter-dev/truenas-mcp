@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { existsSync } from 'node:fs';
 import http, { IncomingMessage, ServerResponse } from 'node:http';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -20,6 +21,9 @@ import { taskTools } from './tools/tasks.js';
 import { containerTools } from './tools/containers.js';
 import { updateTools } from './tools/updates.js';
 import { diagnosticsTools } from './tools/diagnostics.js';
+import { permissionTools } from './tools/permissions.js';
+import { reportingTools } from './tools/reporting.js';
+import { stackTools } from './tools/stacks.js';
 import { HostProc } from './host-proc.js';
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -39,18 +43,22 @@ try {
 const client = new TrueNASClient(config.truenasHost, config.truenasApiKey, config.truenasInsecure);
 const docker = makeDockerClient(config.dockerSocket);
 const hostProc = HostProc.detect(config.hostProc);
+const stacksDir = config.stacksDir && existsSync(config.stacksDir) ? config.stacksDir : null;
 
 const tools: ToolDef[] = [
   ...systemTools(client),
+  ...reportingTools(client),
   ...alertTools(client),
   ...storageTools(client),
   ...snapshotTools(client),
   ...shareTools(client),
+  ...permissionTools(client),
   ...serviceTools(client),
   ...appTools(client),
   ...jobTools(client),
   ...taskTools(client),
   ...(docker ? containerTools(docker, { write: config.dockerWriteTools }) : []),
+  ...(docker && stacksDir ? stackTools(docker, stacksDir) : []),
   ...(docker ? updateTools(docker, { write: config.dockerWriteTools }) : []),
   ...diagnosticsTools(docker, hostProc),
 ];
@@ -154,6 +162,11 @@ async function main() {
   log(hostProc
     ? `Host processes readable via ${config.hostProc}.`
     : `Host /proc not mounted at ${config.hostProc} — process_list limited to container processes.`);
+  if (config.stacksDir) {
+    log(stacksDir && docker
+      ? `Compose stacks readable via ${stacksDir}.`
+      : `STACKS_DIR ${config.stacksDir} ${stacksDir ? 'set but Docker is unavailable' : 'not found'} — stack tools disabled.`);
+  }
 
   httpServer.listen(config.port, () => {
     log(`v${config.version} listening on :${config.port} (${tools.length} tools).`);

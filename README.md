@@ -31,9 +31,11 @@ services:
       TRUENAS_API_KEY: ${TRUENAS_API_KEY}
       TRUENAS_INSECURE: "true"
       MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN}
+      STACKS_DIR: /mnt/apps/stacks
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /proc:/host/proc:ro   # optional: host processes for process_list
+      - /mnt/apps/stacks:/mnt/apps/stacks:ro   # optional: compose files for stack_list/stack_compose (same path as on the host)
     group_add:
       - ${DOCKER_GID}   # stat -c %g /var/run/docker.sock
     read_only: true
@@ -59,6 +61,7 @@ The image runs as the unprivileged `node` user; `group_add` gives it access to t
 | `DOCKER_SOCKET` | | `/var/run/docker.sock` | Container tools are disabled if the socket is missing |
 | `DOCKER_WRITE_TOOLS` | | `false` | `true` registers the Docker write tools (see below) |
 | `HOST_PROC` | | `/host/proc` | Where the host's `/proc` is mounted read-only; enables host-wide `process_list` |
+| `STACKS_DIR` | | | Directory holding the compose stacks (e.g. Dockge/Dockhand `/mnt/apps/stacks`), mounted read-only **at the same path as on the host** so the paths in compose labels resolve; enables `stack_list` / `stack_compose` |
 
 ---
 
@@ -83,12 +86,15 @@ All entities follow a consistent **list / details** pattern. TrueNAS timestamps 
 |---|---|
 | `pool_list` | All ZFS pools — health, status, usable capacity (used + available) |
 | `pool_details` | Single pool: health, capacity, last scrub |
-| `disk_list` | All disks — model, type, pool assignment, temperature, SMART result, ZFS error counts |
-| `disk_details` | Single disk: serial, size, temperature, full SMART history, vdev assignment, ZFS errors |
+| `disk_list` | All disks — model, type, pool assignment, current temperature, ZFS error counts |
+| `disk_details` | Single disk: serial, size, current temperature and 7-day min/max/avg, vdev assignment, ZFS errors |
 | `dataset_list` | All ZFS datasets with used/available space; optionally filter by pool |
+| `path_permissions` | Owner, mode and ACL of a path under `/mnt` as the NAS sees it, plus every parent directory (traversal); optionally a user's UID and groups to compare against |
 | `dataset_details` | Full properties for a single dataset: compression, dedup, quota, and more |
 | `snapshot_list` | ZFS snapshots ordered newest-first; filter by dataset, name substring (`name_contains`) or creation date (`since`), configurable limit, boot-pool excluded by default |
 | `snapshot_details` | Single snapshot: size, referenced, compression ratio, clones |
+
+> TrueNAS 25.10 removed the SMART test API, so SMART results are not available; disk health shows up as alerts (`alert_list`) and ZFS error counts.
 
 ### Shares
 
@@ -109,6 +115,7 @@ All entities follow a consistent **list / details** pattern. TrueNAS timestamps 
 | Tool | Description |
 |---|---|
 | `system_info` | Hostname, version, CPU, memory, uptime, load average (1/5/15 min), timezone |
+| `metrics_history` | History of a Reports graph (cpu, cputemp, memory, load, disk/disktemp per disk, interface, ARC, …) over a time range: min/mean/max with peak time, a downsampled series, and reboots with their downtime window (detected from uptime) |
 
 ### Apps
 
@@ -125,8 +132,10 @@ All entities follow a consistent **list / details** pattern. TrueNAS timestamps 
 | Tool | Description |
 |---|---|
 | `container_list` | All Docker containers (running and stopped) — name, image, state, health |
-| `container_details` | Single container: image, state, ports, mounts, networks, labels. Secret env vars are redacted. |
+| `container_details` | Single container: image, state, ports, mounts, networks, labels, and runtime settings (devices/GPUs, shared `network_mode`, restart policy, privileges, capabilities, limits, DNS). Secret env vars are redacted. |
 | `container_logs` | Recent log output for a container; configurable line count (default 100) |
+| `stack_list` | All compose stacks: each declared service with its container(s) and state, plus `missing_containers` (declared but no container exists) and `orphan_containers` (container whose service is no longer declared). Needs `STACKS_DIR`. |
+| `stack_compose` | A stack's compose file(s) with secret values redacted and `${VAR}` references kept; for `.env` only the variable names. Needs `STACKS_DIR`. |
 
 Registered when the Docker socket is mounted.
 
@@ -197,6 +206,7 @@ Access to the Docker socket is root-equivalent on the host, and mounting it `:ro
 - [`src/docker-client.ts`](src/docker-client.ts) checks every request against a fixed allowlist of method + path (read endpoints, start/stop/restart, image pull/prune, and the create/rename/delete steps of an update). Query strings are built internally; there is no generic passthrough, exec, build, volume or network access.
 - `/containers/create` is only reached through the update path, whose body is always derived from an existing container's inspect output — tool arguments can't supply container configuration, mounts or privileges. Containers are never deleted with their volumes.
 - The `/proc` mount is read-only; process command lines are redacted for passwords, tokens and URL credentials.
+- The stacks mount is read-only. Only compose files and `.env` are read, only after their real path is confirmed to be inside `STACKS_DIR` (no tool argument is used as a path); `.env` values are never returned, and secret-looking compose values are redacted.
 - `/mcp` requires the bearer token; comparison is constant-time.
 - Run the container read-only, without capabilities, as non-root (see the compose example), and keep it behind TLS (e.g. Traefik) if it is reachable beyond the LAN.
 
