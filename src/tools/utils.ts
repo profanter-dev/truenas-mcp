@@ -30,12 +30,16 @@ export function formatDuration(sec: number): string {
   return `${s}s`;
 }
 
+// Masks URL credentials and `--password=x` / `token x` style arguments.
+export function redactInlineSecrets(text: string): string {
+  return text
+    .replace(/(:\/\/[^:/\s@]+:)[^@\s]+@/g, '$1[redacted]@')
+    .replace(/((?:^|\s)-{0,2}[\w.-]*(?:pass(?:word|wd)?|secret|token|api[-_]?key|auth)[\w.-]*[= ])(\S+)/gi, '$1[redacted]');
+}
+
 // Command lines are world-readable on Linux and sometimes carry credentials.
 export function redactCommand(cmd: string): string {
-  return cmd
-    .replace(/(:\/\/[^:/\s@]+:)[^@\s]+@/g, '$1[redacted]@')
-    .replace(/((?:^|\s)-{0,2}[\w.-]*(?:pass(?:word|wd)?|secret|token|api[-_]?key|auth)[\w.-]*[= ])(\S+)/gi, '$1[redacted]')
-    .slice(0, 300);
+  return redactInlineSecrets(cmd).slice(0, 300);
 }
 
 // Escapes a literal for use in a TrueNAS `~` (Python re) query filter.

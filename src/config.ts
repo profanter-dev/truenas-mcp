@@ -7,6 +7,7 @@ export interface Config {
   dockerSocket: string;
   dockerWriteTools: boolean;
   hostProc: string;
+  stacksDir: string | null;
   version: string;
 }
 
@@ -30,6 +31,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     dockerSocket: env['DOCKER_SOCKET'] || '/var/run/docker.sock',
     dockerWriteTools: env['DOCKER_WRITE_TOOLS'] === 'true',
     hostProc: env['HOST_PROC'] || '/host/proc',
+    stacksDir: env['STACKS_DIR'] || null,
     version: env['APP_VERSION'] || 'dev',
   };
 }

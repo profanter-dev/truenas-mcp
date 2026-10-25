@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { DockerClient } from '../docker-client.js';
 import { ToolDef, READ_ONLY, str, posInt } from './registry.js';
+import { formatBytes } from './utils.js';
 
 type AnyObj = Record<string, unknown>;
 
@@ -40,13 +41,73 @@ export async function resolveContainer(docker: DockerClient, nameOrId: string): 
 // Labels carry credentials too, e.g. Traefik basic-auth middlewares store
 // htpasswd hashes in `...basicauth.users`. Keep the key, mask the value.
 const SENSITIVE_LABEL_KEY = /(password|passwd|secret|token|key|credential|(basic|digest)auth\.users)/i;
-const HASH_VALUE = /\$(apr1|2[abxy]?|[156])\$|\{SHA\}/;
+export const HASH_VALUE = /\$(apr1|2[abxy]?|[156])\$|\{SHA\}/;
 
 function redactLabels(labels: unknown): Record<string, string> {
   return Object.fromEntries(
     Object.entries((labels as Record<string, string> | null) ?? {}).map(([k, v]) =>
       [k, SENSITIVE_LABEL_KEY.test(k) || HASH_VALUE.test(String(v)) ? '[redacted]' : v]),
   );
+}
+
+// Docker's default /dev/shm size; only a different value was set deliberately.
+const DEFAULT_SHM = 64 * 1024 * 1024;
+
+// Runtime settings that live only in HostConfig (devices, network sharing,
+// privileges, limits). Defaults are omitted to keep the output short.
+async function runtimeSettings(docker: DockerClient, hc: AnyObj): Promise<AnyObj> {
+  const list = (k: string) => {
+    const v = hc[k] as unknown[] | null | undefined;
+    return v?.length ? v : undefined;
+  };
+
+  // Compose's `network_mode: service:x` is stored as `container:<id>`.
+  let networkMode = hc['NetworkMode'] as string | undefined;
+  const shared = networkMode?.match(/^container:(.+)$/);
+  if (shared) {
+    const owner = await resolveContainer(docker, shared[1]).catch(() => null);
+    networkMode = `container:${owner ? primaryName(owner['Names']) : shortId(shared[1])}`;
+  } else if (networkMode !== 'host' && networkMode !== 'none') {
+    networkMode = undefined;
+  }
+
+  const restart = hc['RestartPolicy'] as AnyObj | undefined;
+  const retries = Number(restart?.['MaximumRetryCount'] ?? 0);
+  const devices = (hc['Devices'] as AnyObj[] | null | undefined)?.map((d) => {
+    const perms = d['CgroupPermissions'] && d['CgroupPermissions'] !== 'rwm' ? `:${d['CgroupPermissions']}` : '';
+    return `${d['PathOnHost']}:${d['PathInContainer']}${perms}`;
+  });
+  const deviceRequests = (hc['DeviceRequests'] as AnyObj[] | null | undefined)?.map((r) => ({
+    driver: r['Driver'] || undefined,
+    count: r['Count'] || undefined,
+    device_ids: (r['DeviceIDs'] as unknown[] | null)?.length ? r['DeviceIDs'] : undefined,
+    capabilities: r['Capabilities'],
+  }));
+  const memory = Number(hc['Memory'] ?? 0);
+  const nanoCpus = Number(hc['NanoCpus'] ?? 0);
+  const shm = Number(hc['ShmSize'] ?? DEFAULT_SHM);
+  const pids = Number(hc['PidsLimit'] ?? 0);
+
+  return {
+    network_mode: networkMode,
+    restart_policy: restart?.['Name'] ? `${restart['Name']}${retries ? `:${retries}` : ''}` : undefined,
+    privileged: hc['Privileged'] || undefined,
+    devices: devices?.length ? devices : undefined,
+    device_requests: deviceRequests?.length ? deviceRequests : undefined,
+    group_add: list('GroupAdd'),
+    cap_add: list('CapAdd'),
+    cap_drop: list('CapDrop'),
+    security_opt: list('SecurityOpt'),
+    read_only_rootfs: hc['ReadonlyRootfs'] || undefined,
+    runtime: hc['Runtime'] && hc['Runtime'] !== 'runc' ? hc['Runtime'] : undefined,
+    memory_limit: memory > 0 ? formatBytes(memory) : undefined,
+    cpus: nanoCpus > 0 ? nanoCpus / 1e9 : undefined,
+    cpu_shares: hc['CpuShares'] || undefined,
+    pids_limit: pids > 0 ? pids : undefined,
+    shm_size: shm && shm !== DEFAULT_SHM ? formatBytes(shm) : undefined,
+    dns: list('Dns'),
+    extra_hosts: list('ExtraHosts'),
+  };
 }
 
 function notFound(nameOrId: string): string {
@@ -105,6 +166,7 @@ export async function containerDetails(docker: DockerClient, nameOrId: string): 
   const cfg = detail['Config'] as AnyObj ?? {};
   const state = detail['State'] as AnyObj ?? {};
   const net = (detail['NetworkSettings'] as AnyObj ?? {})['Networks'] as AnyObj ?? {};
+  const hostConfig = detail['HostConfig'] as AnyObj ?? {};
 
   return JSON.stringify({
     id: shortId(detail['Id']),
@@ -116,7 +178,8 @@ export async function containerDetails(docker: DockerClient, nameOrId: string): 
     finished_at: state['FinishedAt'] === '0001-01-01T00:00:00Z' ? null : state['FinishedAt'],
     health: (state['Health'] as AnyObj | undefined)?.['Status'] ?? null,
     restart_count: detail['RestartCount'],
-    ports: (detail['HostConfig'] as AnyObj ?? {})['PortBindings'],
+    ports: hostConfig['PortBindings'],
+    runtime: await runtimeSettings(docker, hostConfig),
     labels: redactLabels(cfg['Labels']),
     env: (cfg['Env'] as string[] | undefined)?.filter((e) => !/(PASSWORD|SECRET|TOKEN|KEY)=/i.test(e)) ?? [],
     networks: Object.keys(net),
@@ -220,7 +283,7 @@ export function containerTools(docker: DockerClient, opts: { write: boolean }): 
     {
       tool: {
         name: 'container_details',
-        description: 'Full details for a single Docker container: image, state, ports, mounts, networks, labels. Environment variables and labels with secrets are redacted.',
+        description: 'Full details for a single Docker container: image, state, ports, mounts, networks, labels, and runtime settings (devices/GPUs, shared network_mode, restart policy, privileges, capabilities, limits, DNS). Environment variables and labels with secrets are redacted.',
         inputSchema: { type: 'object', properties: { name_or_id: NAME_OR_ID }, required: ['name_or_id'] },
         annotations: READ_ONLY,
       },

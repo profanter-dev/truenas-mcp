@@ -142,11 +142,9 @@ export async function poolDetails(client: TrueNASClient, poolName: string): Prom
 // ── disk_status ───────────────────────────────────────────────────────────────
 
 export async function diskList(client: TrueNASClient): Promise<string> {
-  const [disks, pools, smartTests] = await Promise.all([
+  const [disks, pools] = await Promise.all([
     client.call<AnyObj[]>('disk.query'),
     client.call<AnyObj[]>('pool.query'),
-    client.call<AnyObj[]>('smart.test.query', [[], { order_by: ['-ended'], limit: 500 }])
-      .catch(() => [] as AnyObj[]),
   ]);
 
   const diskNames = disks.map((d) => d['name'] as string).filter(Boolean);
@@ -156,16 +154,9 @@ export async function diskList(client: TrueNASClient): Promise<string> {
 
   const vdevMap = buildDiskVdevMap(pools);
 
-  const lastSmartByDisk = new Map<string, AnyObj>();
-  for (const t of smartTests) {
-    const dn = t['disk'] as string | undefined;
-    if (dn && !lastSmartByDisk.has(dn)) lastSmartByDisk.set(dn, t);
-  }
-
   const result = disks.map((disk) => {
     const name = disk['name'] as string;
     const vdev = vdevMap.get(name);
-    const lastTest = lastSmartByDisk.get(name);
     const hasZfsErrors = vdev && (vdev.read_errors > 0 || vdev.write_errors > 0 || vdev.checksum_errors > 0);
 
     return {
@@ -174,7 +165,6 @@ export async function diskList(client: TrueNASClient): Promise<string> {
       type: disk['type'] ?? 'Unknown',
       pool: vdev?.pool ?? null,
       temperature_c: temps[name] ?? null,
-      smart_status: lastTest ? (lastTest['result'] as string) : (disk['smart_enabled'] ? 'no_tests_run' : 'disabled'),
       zfs_errors: hasZfsErrors ? {
         read: vdev!.read_errors,
         write: vdev!.write_errors,
@@ -189,22 +179,21 @@ export async function diskList(client: TrueNASClient): Promise<string> {
 // ── disk_details ──────────────────────────────────────────────────────────────
 
 export async function diskDetails(client: TrueNASClient, diskName: string): Promise<string> {
-  const [disks, pools, smartTests, tz] = await Promise.all([
+  const [disks, pools] = await Promise.all([
     client.call<AnyObj[]>('disk.query', [[['name', '=', diskName]]]),
     client.call<AnyObj[]>('pool.query'),
-    client.call<AnyObj[]>('smart.test.query', [
-      [['disk', '=', diskName]],
-      { order_by: ['-ended'], limit: 20 },
-    ]).catch(() => [] as AnyObj[]),
-    nasTimezone(client),
   ]);
 
   if (!disks.length) return JSON.stringify({ error: `Disk '${diskName}' not found.` }, null, 2);
 
   const disk = disks[0];
-  const temp = await client
-    .call<Record<string, number | null>>('disk.temperatures', [[diskName]])
-    .catch(() => ({}) as Record<string, number | null>);
+  const [temp, tempAgg] = await Promise.all([
+    client.call<Record<string, number | null>>('disk.temperatures', [[diskName]])
+      .catch(() => ({}) as Record<string, number | null>),
+    client.call<Record<string, { min: number; max: number; avg: number }>>('disk.temperature_agg', [[diskName], 7])
+      .catch(() => ({}) as Record<string, { min: number; max: number; avg: number }>),
+  ]);
+  const agg = tempAgg[diskName];
 
   const vdevMap = buildDiskVdevMap(pools);
   const vdev = vdevMap.get(diskName);
@@ -219,16 +208,10 @@ export async function diskDetails(client: TrueNASClient, diskName: string): Prom
     rotation_rpm: disk['rotationrate'] ?? 'SSD/NVMe',
     bus: disk['bus'] ?? null,
     temperature_c: temp[diskName] ?? null,
-    smart_enabled: disk['smart_enabled'] ?? false,
+    temperature_7d_c: agg ? { min: agg.min, max: agg.max, avg: Math.round(agg.avg * 10) / 10 } : null,
     pool: vdev?.pool ?? null,
     vdev: vdev ? { name: vdev.vdev_name, status: vdev.status } : null,
     zfs_errors: vdev ? { read: vdev.read_errors, write: vdev.write_errors, checksum: vdev.checksum_errors } : null,
-    smart_tests: smartTests.map((t) => ({
-      type: t['type'],
-      result: t['result'],
-      ended: formatTs(t['ended'], tz) ?? t['ended'] ?? null,
-      lifetime_hours: t['lifetime'] ?? null,
-    })),
   }, null, 2);
 }
 
@@ -337,7 +320,7 @@ export function storageTools(client: TrueNASClient): ToolDef[] {
     {
       tool: {
         name: 'disk_list',
-        description: 'List all disks with model, type, pool assignment, temperature, SMART last result, and ZFS error counts.',
+        description: 'List all disks with model, type, pool assignment, current temperature, and ZFS error counts. (TrueNAS 25.10 no longer exposes SMART results through its API.)',
         inputSchema: { type: 'object', properties: {} },
         annotations: READ_ONLY,
       },
@@ -346,7 +329,7 @@ export function storageTools(client: TrueNASClient): ToolDef[] {
     {
       tool: {
         name: 'disk_details',
-        description: 'Full details for a single disk: serial, size, temperature, SMART test history, vdev assignment, and ZFS errors.',
+        description: 'Full details for a single disk: serial, size, current temperature and 7-day min/max/avg, vdev assignment, and ZFS errors.',
         inputSchema: {
           type: 'object',
           properties: {
