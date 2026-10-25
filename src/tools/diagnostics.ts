@@ -5,7 +5,7 @@ import { DockerClient } from '../docker-client.js';
 import { HostProc, CLK_TCK, ProcSample } from '../host-proc.js';
 import { ToolDef, ToolArgs, READ_ONLY, optStr, posInt } from './registry.js';
 import { ownContainerId, primaryName, resolveContainer } from './containers.js';
-import { formatBytes, formatDuration, mapLimit } from './utils.js';
+import { formatBytes, formatDuration, mapLimit, redactCommand } from './utils.js';
 
 type AnyObj = Record<string, unknown>;
 
@@ -14,14 +14,6 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const round1 = (n: number) => Math.round(n * 10) / 10;
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 const rate = (bytesPerSec: number) => `${formatBytes(bytesPerSec)}/s`;
-
-// Command lines are world-readable on Linux and sometimes carry credentials.
-export function redactCommand(cmd: string): string {
-  return cmd
-    .replace(/(:\/\/[^:/\s@]+:)[^@\s]+@/g, '$1[redacted]@')
-    .replace(/((?:^|\s)-{0,2}[\w.-]*(?:pass(?:word|wd)?|secret|token|api[-_]?key|auth)[\w.-]*[= ])(\S+)/gi, '$1[redacted]')
-    .slice(0, 300);
-}
 
 // ── container_stats ────────────────────────────────────────────────────────────
 

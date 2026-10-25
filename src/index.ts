@@ -16,6 +16,7 @@ import { systemTools } from './tools/system.js';
 import { appTools } from './tools/apps.js';
 import { serviceTools } from './tools/services.js';
 import { snapshotTools } from './tools/snapshots.js';
+import { taskTools } from './tools/tasks.js';
 import { containerTools } from './tools/containers.js';
 import { updateTools } from './tools/updates.js';
 import { diagnosticsTools } from './tools/diagnostics.js';
@@ -48,6 +49,7 @@ const tools: ToolDef[] = [
   ...serviceTools(client),
   ...appTools(client),
   ...jobTools(client),
+  ...taskTools(client),
   ...(docker ? containerTools(docker, { write: config.dockerWriteTools }) : []),
   ...(docker ? updateTools(docker, { write: config.dockerWriteTools }) : []),
   ...diagnosticsTools(docker, hostProc),

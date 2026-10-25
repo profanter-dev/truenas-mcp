@@ -1,19 +1,11 @@
 import { TrueNASClient } from '../truenas-client.js';
 import { ToolDef, READ_ONLY } from './registry.js';
-import { formatBytes } from './utils.js';
+import { formatBytes, formatTs, nasTimezone } from './utils.js';
 
 type AnyObj = Record<string, unknown>;
 
-function parseTs(val: unknown): string | null {
-  if (val == null) return null;
-  if (typeof val === 'object' && '$date' in (val as object)) return new Date((val as { $date: number }).$date).toISOString();
-  if (typeof val === 'number') return new Date(val * 1000).toISOString();
-  if (typeof val === 'string') { const d = new Date(val); return isNaN(d.getTime()) ? null : d.toISOString(); }
-  return null;
-}
-
 export async function systemInfo(client: TrueNASClient): Promise<string> {
-  const info = await client.call<AnyObj>('system.info');
+  const [info, tz] = await Promise.all([client.call<AnyObj>('system.info'), nasTimezone(client)]);
 
   const loadavg = info['loadavg'] as number[] | undefined;
   const physmem = info['physmem'] as number | null | undefined;
@@ -34,7 +26,7 @@ export async function systemInfo(client: TrueNASClient): Promise<string> {
       '5min': parseFloat(loadavg[1].toFixed(2)),
       '15min': parseFloat(loadavg[2].toFixed(2)),
     } : null,
-    boot_time: parseTs(info['boottime']),
+    boot_time: formatTs(info['boottime'], tz),
     timezone: info['timezone'],
   }, null, 2);
 }

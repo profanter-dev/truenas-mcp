@@ -75,7 +75,7 @@ Or on the LAN without Traefik, publish the port (`ports: ["3000:3000"]`) and use
 
 ## Tools
 
-All entities follow a consistent **list / details** pattern.
+All entities follow a consistent **list / details** pattern. TrueNAS timestamps are returned in the NAS's configured timezone with their UTC offset (e.g. `2026-10-25T02:00:10+01:00`), so they read as local time and stay unambiguous across DST changes.
 
 ### Storage
 
@@ -87,7 +87,7 @@ All entities follow a consistent **list / details** pattern.
 | `disk_details` | Single disk: serial, size, temperature, full SMART history, vdev assignment, ZFS errors |
 | `dataset_list` | All ZFS datasets with used/available space; optionally filter by pool |
 | `dataset_details` | Full properties for a single dataset: compression, dedup, quota, and more |
-| `snapshot_list` | ZFS snapshots ordered newest-first; filter by dataset, configurable limit, boot-pool excluded by default |
+| `snapshot_list` | ZFS snapshots ordered newest-first; filter by dataset, name substring (`name_contains`) or creation date (`since`), configurable limit, boot-pool excluded by default |
 | `snapshot_details` | Single snapshot: size, referenced, compression ratio, clones |
 
 ### Shares
@@ -176,8 +176,17 @@ Containers are recreated from their own configuration via the Docker API — no 
 | Tool | Description |
 |---|---|
 | `job_list` | Unique job types with last-run status and timestamp (cron jobs shown with human-readable description) |
-| `job_history` | Full run history for a specific job; requires `description` (from `job_list`) and `limit` |
-| `alert_list` | Active alerts sorted by severity: CRITICAL → ERROR → WARNING → NOTICE → INFO |
+| `job_history` | Full run history for a specific job, including each run's arguments (secrets masked; for `mail.send` the email subject, recipients and body); requires `description` (from `job_list`) and `limit`. TrueNAS keeps jobs in memory, so history starts at the last boot. |
+| `alert_list` | Active alerts sorted by severity: CRITICAL → ERROR → WARNING → NOTICE → INFO. Cleared alerts are gone — use `job_history` for `mail.send` to read alert emails. |
+
+### Scheduled & data-protection tasks
+
+| Tool | Description |
+|---|---|
+| `snapshot_task_list` | Periodic snapshot tasks — dataset, recursive/exclude, naming schema, retention, cron schedule, enabled, last run |
+| `replication_task_list` | Replication tasks — direction, transport, source/target, linked snapshot tasks and naming schemas, schedule, retention, last run. SSH credentials reduced to their name; encryption keys never returned. |
+| `cronjob_list` | Cron jobs — description, command (credentials redacted), user, cron schedule, enabled |
+| `audit_query` | Audit log, newest first, filterable by service, event (e.g. `SHUTDOWN`, `REBOOT`, `AUTHENTICATION`), method, username and time range (`since`/`before`). Survives reboots, so it shows who shut the NAS down and from where. Needs an API key whose user has the `SYSTEM_AUDIT_READ` role (e.g. Read-only Administrator). |
 
 ---
 

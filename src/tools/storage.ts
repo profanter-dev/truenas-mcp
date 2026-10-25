@@ -1,16 +1,8 @@
 import { TrueNASClient } from '../truenas-client.js';
 import { ToolDef, READ_ONLY, str, optStr } from './registry.js';
-import { formatBytes } from './utils.js';
+import { formatBytes, formatTs, nasTimezone } from './utils.js';
 
 type AnyObj = Record<string, unknown>;
-
-function parseTimestamp(val: unknown): string | null {
-  if (val == null) return null;
-  if (typeof val === 'string') { const d = new Date(val); return isNaN(d.getTime()) ? val : d.toISOString(); }
-  if (typeof val === 'number') return new Date(val * 1000).toISOString();
-  if (typeof val === 'object' && '$date' in (val as object)) return new Date((val as { $date: number }).$date).toISOString();
-  return null;
-}
 
 // ── Pool topology helpers ─────────────────────────────────────────────────────
 
@@ -116,9 +108,10 @@ export async function poolList(client: TrueNASClient): Promise<string> {
 // ── pool_details ──────────────────────────────────────────────────────────────
 
 export async function poolDetails(client: TrueNASClient, poolName: string): Promise<string> {
-  const [pools, rootDatasets] = await Promise.all([
+  const [pools, rootDatasets, tz] = await Promise.all([
     client.call<AnyObj[]>('pool.query', [[['name', '=', poolName]]]),
     client.call<AnyObj[]>('pool.dataset.query', [[['id', '=', poolName]]]),
+    nasTimezone(client),
   ]);
 
   if (!pools.length) return JSON.stringify({ error: `Pool '${poolName}' not found.` }, null, 2);
@@ -136,8 +129,8 @@ export async function poolDetails(client: TrueNASClient, poolName: string): Prom
     ...cap,
     last_scrub: scan ? {
       state: scan['state'],
-      start_time: parseTimestamp(scan['start_time']),
-      end_time: parseTimestamp(scan['end_time']),
+      start_time: formatTs(scan['start_time'], tz),
+      end_time: formatTs(scan['end_time'], tz),
       errors: scan['errors'] ?? 0,
       bytes_processed: scan['bytes_processed'] != null ? formatBytes(scan['bytes_processed'] as number) : null,
     } : null,
@@ -196,13 +189,14 @@ export async function diskList(client: TrueNASClient): Promise<string> {
 // ── disk_details ──────────────────────────────────────────────────────────────
 
 export async function diskDetails(client: TrueNASClient, diskName: string): Promise<string> {
-  const [disks, pools, smartTests] = await Promise.all([
+  const [disks, pools, smartTests, tz] = await Promise.all([
     client.call<AnyObj[]>('disk.query', [[['name', '=', diskName]]]),
     client.call<AnyObj[]>('pool.query'),
     client.call<AnyObj[]>('smart.test.query', [
       [['disk', '=', diskName]],
       { order_by: ['-ended'], limit: 20 },
     ]).catch(() => [] as AnyObj[]),
+    nasTimezone(client),
   ]);
 
   if (!disks.length) return JSON.stringify({ error: `Disk '${diskName}' not found.` }, null, 2);
@@ -232,7 +226,7 @@ export async function diskDetails(client: TrueNASClient, diskName: string): Prom
     smart_tests: smartTests.map((t) => ({
       type: t['type'],
       result: t['result'],
-      ended: t['ended'] ?? null,
+      ended: formatTs(t['ended'], tz) ?? t['ended'] ?? null,
       lifetime_hours: t['lifetime'] ?? null,
     })),
   }, null, 2);
